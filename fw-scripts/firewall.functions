@@ -1,0 +1,170 @@
+#!/bin/bash
+
+function semremarks() {
+  PARAMLINHA="$1"
+  PARAMLINHA=${PARAMLINHA%% }
+  PARAMLINHA=${PARAMLINHA## }
+  #if [ `echo $PARAMLINHA|grep ^#|wc -l` -gt 0 ] ; then 
+  #  echo "" 
+  #  return
+  #fi
+  RESULT_VALUE=$(echo $PARAMLINHA|cut -d "#" -f1)
+  echo "$RESULT_VALUE"
+}
+
+function get_dns_bind9() {
+  bind_conf_file=/etc/bind/named.conf.options
+  cmd=`sed -n '/forwarders[[:space:]]{/,/};/p' $bind_conf_file|\
+  grep -v "//"|\
+  sed -n '/\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}/p'|\
+  tr -d '\t'|\
+  tr -d ' '|\
+  tr -d ','|\
+  tr -d ';'`
+  echo "$cmd"
+}
+
+function get_dns_squid() {
+  squid_conf_file=/etc/squid3/squid.conf.dns
+  LINHA=`cat $squid_conf_file |grep -v "^#"|sed -n '/\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}/p'`
+  cmd=`semremarks "$LINHA"`
+  echo "$cmd"
+}
+
+function convert_url2site() {
+  PARAM=`semremarks "$1"`
+  SEMHTTP=${PARAM##"http://"}
+  RESULT_VALUE=`expr "$SEMHTTP" |cut -d "/" -f1`
+  [ "$RESULT_VALUE" == "" ] || [ -z "$RESULT_VALUE" ] && RESULT_VALUE="$SEMHTTP"
+  OLDSITE="$RESULT_VALUE"
+  RESULT_VALUE=`expr "$OLDSITE" |cut -d ":" -f1`
+  [ "$RESULT_VALUE" == "" ] || [ -z "$RESULT_VALUE" ] && RESULT_VALUE="$OLDSITE"
+  echo "$RESULT_VALUE"
+}
+
+function getip_from_line() {
+  PARAM=`semremarks "$1"`
+  IP=`expr "$PARAM" |cut -d "/" -f1`
+  MASK=`expr "$PARAM" |cut -d "/" -f2`
+  if [ "$IP" == "" ] || [ -z "$IP" ] ; then
+     IP="$PARAM"
+     MASK="32"
+  fi
+  _getip_from_line="$IP/$MASK"
+  echo "$_getip_from_line"
+}
+
+function valid_ip() {
+  # Test an IP address for validity:
+  # Usage:
+  #      valid_ip IP_ADDRESS
+  #      if [[ $? -eq 0 ]]; then echo good; else echo bad; fi
+  #   OR
+  #      if valid_ip IP_ADDRESS; then echo good; else echo bad; fi
+  #
+
+    local  ip=$1
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+function do_resolv_conf() {
+  # Lista de DNSs
+  # Comente os que nao deseja usar, e mantenha apenas os que deseja
+  # O maximo de DNS que podem haver sao 3
+cat > /etc/resolv.conf <<END
+nameserver 127.0.0.1 # Local
+# ELDORADO+Speedy Business
+#nameserver 192.168.1.10 200.176.2.10 200.176.2.12
+# ELDORADO+OpenDNS
+#nameserver 192.168.1.10 208.67.222.222 208.67.220.220
+# VIDY2+Speedy Business
+#nameserver 192.168.1.254 200.176.2.10 200.176.2.12
+# VIDY2+OpenDNS
+#nameserver 192.168.1.254 208.67.222.222 208.67.220.220
+# Apenas o Speedy Business
+#nameserver 200.176.2.10 200.176.2.12
+# Apenas o OpenDNS
+#nameserver 208.67.222.222 208.67.220.220
+# Apenas o Google DNS
+#nameserver 8.8.8.8 8.8.4.4 # Google DNSs
+END
+}
+
+# Converte CIDR para octeto, por exemplo: 
+# CIDR=20
+# MASK=`cidr2oct $CIDR` // retorna 255.255.240.0
+# 
+# ou automaticamente:
+#mask=$1
+#if grep -q '\.' <<<$mask; then
+#    oct2cidr $mask
+#else
+#    cidr2oct $mask
+#fi
+function cidr2oct () {
+    local mask bit octs i
+    mask=$1
+
+    if grep -q '\.' <<<$mask; then
+	echo $mask
+	return
+    fi
+
+    for ((i=$mask; $i>0; i--)); do
+	bit="${bit}1"
+    done
+    i=$((32 - $mask))
+    for ((i=$i; $i>0; i--)); do
+	bit="${bit}0"
+    done
+
+    octs=$(echo 'ibase=2;obase=A;'$(cut -c 1-8 <<<$bit) |bc)
+    octs=${octs}.$(echo 'ibase=2;obase=A;'$(cut -c 9-16 <<<$bit) |bc)
+    octs=${octs}.$(echo 'ibase=2;obase=A;'$(cut -c 17-24 <<<$bit) |bc)
+    octs=${octs}.$(echo 'ibase=2;obase=A;'$(cut -c 25-32 <<<$bit) |bc)
+
+    echo $octs
+}
+
+# Converte octetos para CIDR, por exemplo:
+# CIDR=255.255.240.0
+# MASK=`oct2cidr $CIDR` // retorna 20
+#
+# ou automaticamente:
+#mask=$1
+#if grep -q '\.' <<<$mask; then
+#    oct2cidr $mask
+#else
+#    cidr2oct $mask
+#fi
+
+function oct2cidr () {
+    local mask bit cidr i
+    mask=$1
+
+    if grep -qv '\.' <<<$mask; then
+	echo $mask
+	return
+    fi
+
+    for i in 1 2 3 4; do
+	bit=${bit}$(printf "%08d" \
+	    $(echo 'ibase=10;obase=2;'$(cut -d '.' -f $i <<<$mask) |bc))
+    done
+    cidr=$(echo -n ${bit%%0*} |wc -m)
+
+    echo $cidr
+}
+
+

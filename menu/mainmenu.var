@@ -1,0 +1,13 @@
+MENUDIR="/home/administrador/menu"
+SCRIPTS="/home/administrador/scripts"
+LOGS="/home/administrador/logs"
+SQUIDACL="/etc/squid3/acl"
+FIREWALL="/home/administrador/fw-scripts"
+IPTABLES="/sbin/iptables"
+SGQ_FORMATOS="pdf doc docx xls xlsx ods odt"
+SGQ_DOWNLOADS="/home/www-site/html/data/downloads"
+PROXY_TEST_USER="proxy_internet"
+PROXY_TEST_PASS="senha"
+PROXY_TEST_DOMAIN=WINSERVERDOMAIN.LOCAL
+PROXY_IFACE=eth0
+PROXY_PORT=3128

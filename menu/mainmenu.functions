@@ -1,0 +1,189 @@
+#!/bin/bash
+
+function do_submenu(){
+  arquivo="$1"
+  diretorio=`dirname "$arquivo"`
+  if [ "$diretorio" != "$MENUDIR" ] ; then
+     arquivo="$MENUDIR/$arquivo"
+  fi
+
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+
+  clear;
+  CONTINUAR="S"
+  #if ! se_acesso_remoto ; then 
+  #  echo "Os parametros de firewall nao permitem que certas operacoes"
+  #  echo "sejam realizados localmente, mas podera executar essas operacoes"
+  #  echo "a partir de qualquer estacao VIDY usando um terminal SSH (Putty)."
+  #  if ! do_confirmar "Deseja continuar ?" ; then CONTINUAR="N" ; fi
+  #fi
+  if [ "$CONTINUAR" = "S" ] ; then
+    sudo "$arquivo"
+    return 0
+  fi
+}
+
+function editar() {
+  arquivo="$1"
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+  
+  MD5SUM_ANTES=`md5sum "$arquivo"`
+  nano "$1"
+  MD5SUM_DEPOIS=`md5sum "$arquivo"`
+  if [ "$MD5SUM_ANTES" != "$MD5SUM_DEPOIS" ] ; then
+    return 0
+  else 
+    return 1
+  fi
+}
+
+function proxy_conf() {
+  arquivo="$1"
+  restart="$2"
+  if [ "$restart" = "" ] || [ -z "$restart" ] ; then
+    restart="N"
+  fi
+  if editar "$arquivo" ; then 
+    if [ "$restart" != "S" ] ; then
+       service squid3 reload
+       press_enter_to_continue
+       return 0
+    else
+      echo "O arquivo :"
+      echo -e "\t$arquivo"
+      echo "foi alterado, recomendo reiniciar o firewall+proxy."
+      echo "Reiniciar o firewall+proxy ?"
+      read CONFIRMA
+      if [ "$CONFIRMA" = "SIM" ] || [ "$CONFIRMA" = "sim" ] || [ "$CONFIRMA" = "S" ] || [ "$CONFIRMA" = "s" ] ; then
+         if [ "$restart" = "S" ] ; then
+           reinit_firewall
+           service squid3 restart
+           return 0
+         fi
+      fi
+    fi
+  fi
+}
+
+function pesquisar_arquivo() {
+  arquivo="$1"
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+  echo "Um filtro e' uma palavra pelo qual procuraremos em :"
+  echo "$arquivo"
+  echo "E exibiremos apenas as ocorrências encontradas."
+  echo "Sem a definição de um filtro, todas as ocorrências serão mostradas"
+  echo "Digite um filtro para busca :"
+  read FILTRO
+  if [ "$FILTRO" != "" ] ; then
+    cat $arquivo |grep "$FILTRO" |less
+  else
+    cat $arquivo |less
+  fi
+  press_enter_to_continue
+  return 0
+}
+
+function do_confirmar() {
+  # Uso :
+  #      do_confirmar "Confirma ? (sim ou nao)"
+  #      if [[ $? -eq 0 ]]; then echo OK; else echo FALHOU; fi
+  #   OR
+  #      if do_confirmar; then echo OK; else echo FALHOU; fi
+  MSG="$1"
+  [ "$MSG" = "" ] && MSG="Confirma ? (sim ou nao)"
+  echo "$MSG" 
+  read CONFIRMA
+  DO_CONFIRMAR_VALUE="nao"
+  if [ "$CONFIRMA" = "SIM" ] || [ "$CONFIRMA" = "sim" ] || [ "$CONFIRMA" = "S" ] || [ "$CONFIRMA" = "s" ] ; then
+    return 0
+  else 
+    return 1
+  fi
+}
+
+function se_acesso_remoto() {
+  # Uso :
+  #      se_acesso_remoto
+  #      if [[ $? -eq 0 ]]; then echo OK; else echo FALHOU; fi
+  #   OR
+  #      if se_acesso_remoto; then echo OK; else echo FALHOU; fi
+  if [ -z "$SSH_CLIENT" ] || [ "$SSH_CLIENT" = "" ] ; then
+     return 1
+  else
+     return 0
+  fi
+}
+
+function reinit_firewall() {
+  echo "Reiniciando o firewall..."
+  [ -f  "$FIREWALL/firewall.sh" ] && sudo "$FIREWALL/firewall.sh"
+  echo "Firewall carregado, pressione [ENTER] para prosseguir."
+  read espera
+}
+
+
+function valid_ip() {
+  # Test an IP address for validity:
+  # Usage:
+  #      valid_ip IP_ADDRESS
+  #      if [[ $? -eq 0 ]]; then echo good; else echo bad; fi
+  #   OR
+  #      if valid_ip IP_ADDRESS; then echo good; else echo bad; fi
+  #
+
+    local  ip=$1
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+function press_enter_to_continue() {
+  ESPERAR_TEMPO="$1"
+  if [ -z "$ESPERAR_TEMPO" ] || [ "$ESPERAR_TEMPO" = "" ] ; then
+   read -p "Pressione [ENTER] para prosseguir..." -n1 -s
+  else
+    echo "Aguarde $ESPERAR_TEMPO antes de prosseguir..."
+    sleep $ESPERAR_TEMPO
+  fi
+}
+
+function log() {
+  firewall_file_log="$LOGS/acessos_avulsos.log"
+  firewall_log_date="`date +%Y-%m-%d+%H:%M`"
+  if [ -z "$1" ] ; then
+    echo "Parametro para log esta vazio"
+    return
+  fi
+  if ! [ -f "$firewall_file_log" ] ; then
+    echo "Arquivo para registrar log [$firewall_file_log]  não existe !"
+    echo -ne "Criando um arquivo vazio..."
+    touch "$firewall_file_log"
+    echo "[OK]"
+  fi
+  echo "$1"
+  echo "$firewall_log_date|$1" >>$firewall_file_log
+}

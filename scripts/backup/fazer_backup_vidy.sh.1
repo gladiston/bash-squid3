@@ -1,0 +1,1165 @@
+#!/bin/bash
+# Script desenvolvido por : 
+# Gladiston Hamacker Santana <gladiston.santana@gmail.com>
+# Data : 02/02/2006
+# Uso : Faz backup de arquivos/pastas selecionadas
+#       para dois discos usb, um disco usb para dias impares
+#       (seq,qua,sex) e outro disco para dias pares(ter,qui)
+#       dentro de cada disco usb possui os arquivos :
+#       vol_1.txt (seg), vol_2.txt (ter), vol_3.txt (qua),
+#       vol_4.txt (qui), vol_5.txt (sex), vol_6.txt (sab),
+#       vol_7.txt (dom)
+#       Se o dia que se realiza o backup (1(seg) ate 7(dom)) nao
+#       for correspondente ao disco usb que foi plugado
+#       entao o backup sera rejeitado.
+#  
+#       Dentro de cada disco usb tambem devera existir o
+#       arquivo vol_vidy.txt, um arquivo texto contendo o
+#       telefone, endereco e responsaveis que devem ser
+#       contatados caso este disco usb seja roubado (ou outro
+#       sinistro) e uma pessoa de boa indole resolva devolve-lo.
+#
+#       Tambem notifica por email, o sucesso ou falha inclusive
+#       atachando o log por anexo.
+#########################################################
+# funcoes para envio de email contendo falha ou sucesso #
+#########################################################
+# trap ctrl-c and call ctrl_c() trap ctrl_c INT
+trap ctrl_c INT
+function ctrl_c() { 
+  echo "*** backup interrompido pelo usuario ***" ;
+  do_sendmail;
+  exit 1;
+}
+
+function log() {
+  if [ -z "$1" ] ; then
+    echo "Parametro para log esta vazio"
+    return
+  fi
+  if ! [ -f "$file_error_log" ] ; then
+    echo "Arquivo para registrar log [$file_error_log]  não existe !"
+    echo -ne "Criando um arquivo vazio..."
+    touch "$file_error_log"
+    echo "[OK]"
+    #exit 2;
+  fi
+  echo "$1"
+  echo "$1" >>$file_error_log
+}
+
+function sugestao_nome_arq_comprimido() {
+  # retorna um nome sugestivo para uma pasta
+  # em forma de nome de arquivo
+  # util para compactar uma pasta, porem
+  # escolher um nome para o zip que tenha
+  # alguma coisa a ver com o nome original
+  # da pasta onde foram comprimido os 
+  # arquivos.
+  if [ -z "$1" ] || [ "$1" = "" ] ; then
+    echo "Parametro esta vazio"
+    return
+  fi
+
+  # nomes sem acentuacao
+  do_remover_acentuacao "$1"
+  SUGESTAO_ARQUIVO="$RETURN_STRING"
+
+  # trocando // por servidor_ (caso de a origem for um endereco smb //server/compartilhamento)
+  if [ "${SUGESTAO_ARQUIVO:0:2}" = "//" ] ; then
+      SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//\/\//servidor_}
+  else
+      # removendo o primeiro "/" do endereco para compor o nome nome
+      if [ "${backup_file:0:1}" = "/" ] ; then
+        SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+      fi
+  fi
+  # iniciou com _ entao remove o primeiro caracter
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1}
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+  # trocando / por :
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//\//:}
+  # trocando :mnt: por nada
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:mnt:/}
+  # trocando :media: por nada
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:media:/}
+  # trocando : por _
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:/_}
+  # iniciou com _ entao remove o primeiro caracter
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1}
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+  echo $SUGESTAO_ARQUIVO
+}
+
+
+function do_montar_dev() {
+  alvo_device="$1"
+  alvo_pasta="$2"
+  RESULT_VALUE="FALHOU"
+  if [ "$alvo_device" = "" ] ; then 
+     log "Erro na montagem de dispositivo : O nome do dispositivo não foi informado."
+     return
+  fi  
+  if [ "$alvo_pasta" = "" ] ; then
+     log "Erro na montagem de dispositivo : O nome do pasta onde seria montado o dispositivo não foi informado."
+     return
+  fi 
+  if ! [ -d  "$alvo_pasta" ] ; then
+    mkdir -p "$alvo_pasta"
+  fi
+  # montando a unidade de destino, normalmente o usbdisk
+  mount -t $ponto_fs $alvo_device $alvo_pasta -o sync,nosuid,nouser,rw,dirsync,users
+  if [ $? -ne 0 ] ; then
+    log "A montagem da unidade de destino-backup falhou !"
+    log "Tentativa : mount -t $ponto_fs $ponto_device $ponto_destino -o sync,nosuid,nouser,rw,dirsync,users"
+    log "Certifique-se que :"
+    log "- tenha ligado a unidade numa porta USB deste servidor;"
+    log "- o dispositivo USB esteja ligado com o led de funcionamento piscando."
+    log "Desligue o aparelho, aguarde alguns instantes e ligue-o novamente"
+    log "e repita a operacao, se insistir o problema contate"
+    log "imediatamente o supervidor." 
+  else
+    RESULT_VALUE="OK"  
+  fi
+}  
+
+function do_montar_cifs() {
+  alvo_smb="$1"
+  alvo_pasta="$2"
+  RESULT_VALUE="FALHOU"
+  if [ "$alvo_smb" = "" ] ; then 
+     log "Erro na montagem de SMB : O nome de rede não foi informado."
+     return
+  fi  
+  if [ "$alvo_pasta" = "" ] ; then
+     log "Erro na montagem de SMB : O nome do pasta onde seria montado o acesso a [$alvo_device] não foi informado."
+     return
+  fi 
+  if ! [ -d  "$alvo_pasta" ] ; then 
+    mkdir -p "$alvo_pasta"
+  fi
+  # montando a unidade de rede, as variaveis agente_user, agente_pass e agente_dom serao reaproveitadas
+  mount -t cifs $alvo_smb $alvo_pasta -o username=$agente_user,password=$agente_pass,domain=$agente_dom,users,file_mode=0777,dir_mode=0777,iocharset=utf8
+  if [ $? -ne 0 ] ; then
+    log "Falhou : mount -t cifs $alvo_smb $alvo_pasta -o username=$agente_user,password=*****,domain=$agente_dom,users,file_mode=0777,dir_mode=0777,iocharset=utf8"
+  else
+    RESULT_VALUE="OK"    
+  fi
+} 
+
+function do_desmontar() {
+  alvo="$1"
+  if [ "$alvo" = "" ] || \
+     ! [ -d "$alvo" ] ; then
+     echo "alvo para desmontar nao existe : [$alvo]"
+     return
+  fi
+  # so posso desmontar unidades em /mnt ou /media
+  dir_to_unmount=$(mount |grep "$alvo"|cut -d" " -f 3|cut -d"/" -f 2)
+  if [ "$dir_to_unmount" != "media" ] && [ "$dir_to_unmount" != "mnt" ] ; then
+    return
+  fi
+
+  # verifica se esta realmente montado
+  EXISTE=`mount |grep $alvo|wc -l`
+  if [ "$EXISTE" -gt 0 ] ; then
+    umount $alvo
+    [ -d "$alvo" ] && rmdir $alvo
+  fi
+  
+  # se o diretorio montado estiver vazio e estiver localizado em /mnt entao remove-lo
+  if ! [[ "$alvo" =~ "/media" ]] ; then
+    if [ -d "$alvo" ] && [ "$dir_to_unmount" = "mnt" ] ; then
+      if [ "$alvo/*" = "$alvo/*" ] ; then
+        echo "removendo diretorio vazio [$alvo]"
+        rmdir $alvo
+      fi
+    fi
+  fi
+}
+
+function do_remover_acentuacao() {
+  RETURN_STRING=""
+  ORIGINAL_STRING="$1"
+  NEW_STRING="$ORIGINAL_STRING"
+  SUBST_CHAR="_"
+  ACCEPT_CHARS="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!-_=+(){}[]\\,./"
+  # Removendo a acentuacao
+  # Anteriormente usava o aplicativo 'unaccent', mas ele tem problemas em algumas situacoes
+  # assim resolví fazer um modo mais braçal como se pode ver abaixo
+  #if [ -f "/usr/bin/unaccent" ] ; then
+  #    NEW_STRING=`/usr/bin/unaccent UTF-8 "$ORIGINAL_STRING"`
+  #    if [ -z "$NEW_STRING" ] || [ "$NEW_STRING" = "" ] ; then
+  #      NEW_STRING="$ORIGINAL_STRING"
+  #    fi
+  #fi
+  NEW_STRING="${NEW_STRING//º/_}"
+  NEW_STRING="${NEW_STRING//á/a}"
+  NEW_STRING="${NEW_STRING//à/a}"
+  NEW_STRING="${NEW_STRING//ä/a}"
+  NEW_STRING="${NEW_STRING//ã/a}"
+  NEW_STRING="${NEW_STRING//é/e}"
+  NEW_STRING="${NEW_STRING//ê/e}"
+  NEW_STRING="${NEW_STRING//í/i}"
+  NEW_STRING="${NEW_STRING//ï/i}"
+  NEW_STRING="${NEW_STRING//ó/o}"
+  NEW_STRING="${NEW_STRING//õ/o}"
+  NEW_STRING="${NEW_STRING//ú/u}"
+  NEW_STRING="${NEW_STRING//ü/u}"
+  NEW_STRING="${NEW_STRING//Á/A}"
+  NEW_STRING="${NEW_STRING//À/A}"
+  NEW_STRING="${NEW_STRING//Ä/A}"
+  NEW_STRING="${NEW_STRING//Ã/A}"
+  NEW_STRING="${NEW_STRING//É/E}"
+  NEW_STRING="${NEW_STRING//Ê/E}"
+  NEW_STRING="${NEW_STRING//Í/I}"
+  NEW_STRING="${NEW_STRING//Ï/I}"
+  NEW_STRING="${NEW_STRING//Ó/O}"
+  NEW_STRING="${NEW_STRING//Õ/O}"
+  NEW_STRING="${NEW_STRING//Ú/U}"
+  NEW_STRING="${NEW_STRING//Ü/U}"
+  NEW_STRING="${NEW_STRING//ç/c}"
+  NEW_STRING="${NEW_STRING//Ç/C}"
+  
+  # removendo caracteres invalidos
+  LEN=${#NEW_STRING}
+  POS=0
+  while [ $POS -le $LEN ] ; do
+   CHAR="${NEW_STRING:$POS:1}"
+   if [[ "$ACCEPT_CHARS" =~ "$CHAR" ]] ; then
+     RETURN_STRING="$RETURN_STRING$CHAR"
+   else
+     RETURN_STRING="$RETURN_STRING$SUBST_CHAR"
+   fi
+   POS=$((POS+1))
+  done
+  NEW_LEN=${#RETURN_STRING}
+  
+  if [ $LEN != $NEW_LEN ] ; then
+    RETURN_STRING="$ORIGINAL_STRING"
+  fi
+}
+
+function do_copy_comprime() {
+  # copia uma pasta de um local de origem 
+  # para um local de destino
+  # Porem faz a compactacao para o destino
+  copiar_de_origem="$1"
+  copiar_para_destino="$2"
+  RESULT_VALUE="FALHOU"
+
+  if [ "$3" != "tgz"  ] ; then
+    #### USANDO 7ZIP ####
+    COMPACTAR="/usr/bin/7z a -y -t7z -bd -l -m0=lzma -mx=3 -mfb=64 -md=32m -ms=on -v100m -ax@$backup_lista_negra "
+    COMPACTAR_EXT="7z"
+    COMPACTAR_CATALOGAR="/usr/bin/7z l "
+  else
+    #### USANDO TAR.GZ ####
+    COMPACTAR="/bin/tar -czv --exclude-from=$backup_lista_negra -f "
+    COMPACTAR_EXT="tgz"
+    COMPACTAR_CATALOGAR="/bin/tar -tf "
+  fi
+  if [ "$copiar_de_origem" = "" ] ; then 
+     log "Erro na copia de arquivos : O endereco de origem não foi informado."
+     return
+  fi  
+  if [ "$copiar_para_destino" = "" ] ; then
+     log "Erro na copia de arquivos : O endereco de destino não foi informado."
+     return
+  fi 
+  if ! [ -d  "$copiar_para_destino" ] ; then 
+    mkdir -p "$copiar_para_destino"
+  fi  
+  backup_file=`sugestao_nome_arq_comprimido "$copiar_de_origem"`
+  # acrescentando o caminho completo
+  backup_file="$copiar_para_destino/$backup_file.$COMPACTAR_EXT" 
+  #echo $COMPACTAR $backup_file $copiar_de_origem
+  $COMPACTAR $backup_file $copiar_de_origem 2>>$file_error_log
+  # verificando se ouve erro
+  if [ $? -ne 0 ] ; then
+     log "Backup de [$pak] completado porém com alguns erros, verifique o log para saber quais são."
+     
+  else
+     log "Backup de [$pak] completado com sucesso."
+     RESULT_VALUE="OK"
+  fi
+  #if [ -f "$backup_file" ] || [ -f "$backup_file.001" ] ; then
+  #   # Catalogando o arquivo de backup recem-criado
+  #   [ -f "$backup_file" ] && $COMPACTAR_CATALOGAR "$backup_file" >"$backup_file.txt"
+  #   [ -f "$backup_file.001" ] && $COMPACTAR_CATALOGAR "$backup_file.001" >"$backup_file.txt"
+  #fi  
+}
+
+function do_copy() {
+  # copia uma pasta de um local de origem 
+  # para um local de destino
+  # Porem faz a compactacao para o destino se o arquivo não estiver compactado
+  # Atenção : Não subsititui arquivos já existentes na unidade de destino, 
+  #           por essa razão, sempre grave novos backups em pastas novas e
+  #           limpas. 
+  copiar_de_origem="$1"
+  copiar_para_destino="$2"
+  se_normatizar="$3"
+  RESULT_VALUE="OK"
+  LISTA_NAO_COMPACTAR=".7z .ace .ain .alz .apz .ar .arc .ari .arj .ark .axx .b64 .ba .bh .boo .bz .bz2 .bzip \
+  .bzip2 .c00 .c01 .c02 .car .cbr .cbz .cp9 .cpgz .cpt .dar .dd .deb .dgc .dist .ecs .efw \
+  .fdp .gca .gz .gzi .gzip .ha .hbc .hbc2 .hbe .hki .hki1 .hki2 .hki3 .hpk .hyp .ice .ipg \
+  .ipk .ish .j .jgz .jic .kgb .lbr .lemon .lha .lnx .lqr .lzh .lzm .lzma .lzo .lzx .md .mint \
+  .mpkg .mzp .p7m .package .pae .pak .paq6 .paq7 .paq8 .par .par2 .pbi .pcv .pea .pf .pim .pit \
+  .piz .pkg .pup .pup .puz .pwa .qda .r00 .r01 .r02 .r03 .rar .rev .rk .rnc .rpm .rte .rz .rzs \
+  .s00 .s01 .s02 .s7z .sar .sdc .sdn .sea .sen .sfs .sfx .sh .shar .shk .shr .sit .sitx .spt \
+  .sqx .sqz .tar .taz .tbz .tbz2 .tg .tgz .tlz .tz .uc2 .uha .vsi .wad .war .wot .xef .xez \
+  .xpi .xx .y .yz .z .z01 .z02 .z03 .z04 .zap .zip .zipx .zix .zoo .zz .jpg .png .gif .cab \
+  .exe .avi .mpg .mp3 .mp2 .aac .pdf .ods .odt .odp .cfg"
+  
+  LISTA_NAO_SALVAR=".\$\$\$ .tmp .swp .lnk .err \
+  .key01 .key02 .key03 .key04 .key05 .key06 .key07 .key08 .key09 .key10 .key11 .key12 .key13 .key14 .key15 .key16"
+
+  if [ "$copiar_de_origem" = "" ] ; then 
+     log "Erro na copia de arquivos : O endereco de origem não foi informado."
+     return
+  fi  
+  if [ "$copiar_para_destino" = "" ] ; then
+     log "Erro na copia de arquivos : O endereco de destino não foi informado."
+     return
+  fi 
+  if ! [ -d  "$copiar_para_destino" ] ; then 
+    mkdir -p "$copiar_para_destino"
+  fi
+  
+  # Se for especificado para normatizar (="S") entao
+  # os caracteres deverao ser minusculos e sem acento
+  if [ -z "$se_normatizar" ] || [ "$se_normatizar" = "" ] ; then 
+    se_normatizar="N"
+  fi  
+  # lendo todos os arquivos na pasta de origem e jogando para dentro de um arquivo temporario
+  temp=`mktemp`
+  find "$copiar_de_origem/" -type f >$temp
+  while read ARQ_ATUAL ; do
+    ARQ_ATUAL_PASTA=`dirname "$ARQ_ATUAL"`
+    NOME_ARQUIVO=`basename "$ARQ_ATUAL"`
+    FILESIZE=$(stat -c%s "$ARQ_ATUAL")
+    # entao remover a acentuacao que houver no nome de arquivo
+    if [ "$se_normatizar" = "S" ] ; then
+      do_remover_acentuacao "$NOME_ARQUIVO"
+      NOME_ARQUIVO="$RETURN_STRING"
+    fi
+    
+    # Apenas extensoes de arquivos em minusculo
+    NOME_ARQUIVO_EXT=${NOME_ARQUIVO#*.}
+    NOME_ARQUIVO_EXT=`echo "$NOME_ARQUIVO_EXT" | tr [:upper:] [:lower:]`
+
+    # remover a acentuacao que houver no nome da pasta
+    if [ "$se_normatizar" = "S" ] ; then
+      do_remover_acentuacao "$copiar_para_destino/$ARQ_ATUAL_PASTA"
+      RETURN_STRING=`echo "$RETURN_STRING" | tr [:upper:] [:lower:]`
+      NOVA_PASTA="$RETURN_STRING"
+    else
+      NOVA_PASTA="$copiar_para_destino/$ARQ_ATUAL_PASTA"
+    fi
+    # trocando //mnt por /
+    NOVA_PASTA=${NOVA_PASTA//\/\/mnt/\/}
+    # trocando //media/ por /
+    NOVA_PASTA=${NOVA_PASTA//\/\/media/\/}
+    
+    # As linhas a seguir vao determinar se havera compactacao ou se realmente
+    # é necessario fazer o backup de tal arquivo
+    COMPACTAR_ARQUIVO="S"
+    SALVAR_ARQUIVO="S"
+    
+    # tratando arquivos que não devem ser salvos no backup
+    [[ "$LISTA_NAO_SALVAR" =~ "$NOME_ARQUIVO_EXT" ]] && SALVAR_ARQUIVO="N"
+    [[ "$ARQ_ATUAL" =~ "RECYCLER" ]] && SALVAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "thumbs.db" ] && SALVAR_ARQUIVO="N"   
+    
+    # tratando de nomes de arquivos que não devem ser compactados
+    [ "$NOME_ARQUIVO" = "setup.exe" ] && COMPACTAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "install.exe" ] && COMPACTAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "instalar.exe" ] && COMPACTAR_ARQUIVO="N"  
+
+    # arquivos com zero bytes nao devem ser copiados
+    #if [ -f "$ARQ_ATUAL" ] ; then
+    #   ![ -s "$ARQ_ATUAL" ] && COMPACTAR_ARQUIVO="N"   
+    #fi
+    
+    # arquivos menores que 1024x10=10240 bytes (10K)  nao devem ser comprimidos
+    [ "$FILESIZE" -lt 10240 ] && COMPACTAR_ARQUIVO="N"
+
+
+    if [ "$SALVAR_ARQUIVO" = "S" ] ; then
+      ! [ -d "$NOVA_PASTA" ] && mkdir -p "$NOVA_PASTA"
+      [[ "$LISTA_NAO_COMPACTAR" =~ "$NOME_ARQUIVO_EXT" ]] && COMPACTAR_ARQUIVO="N"
+      # somente arquivos com mais de zero bytes podem ser compactados
+      if [ "$COMPACTAR_ARQUIVO" = "S" ] && ! [ -s "$ARQ_ATUAL" ] ; then
+        COMPACTAR_ARQUIVO="N"
+      fi
+
+      if [  "$COMPACTAR_ARQUIVO" = "S" ] ; then
+        echo "[$NOME_ARQUIVO_EXT] transferindo [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz]"
+        if ! [ -f "$NOVA_PASTA/$NOME_ARQUIVO.gz" ] ; then
+          gzip -c "$ARQ_ATUAL" >"$NOVA_PASTA/$NOME_ARQUIVO.gz"
+          if [ $? -ne 0 ] ; then
+             log "[backup-falhou] : erro ao copiar [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz]"
+             RESULT_VALUE="FALHOU"
+          fi
+        fi
+      else
+        echo "[$NOME_ARQUIVO_EXT] transferindo [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO]"
+        if ! [ -f "$NOVA_PASTA/$NOME_ARQUIVO.gz" ] ; then
+          cp  "$ARQ_ATUAL" "$NOVA_PASTA/$NOME_ARQUIVO"
+          if [ $? -ne 0 ] ; then
+             log "[backup-falhou] : erro ao copiar [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO]"
+             RESULT_VALUE="FALHOU"
+          fi
+        fi
+      fi
+    fi
+  done < $temp 
+  [ -f "$temp" ] && rm -f "$temp"
+}
+
+function do_sendmail() {
+  if ! [ -f "/usr/bin/mutt" ] ; then
+    echo "Nao posso notificar por email por falta do arquivo : /usr/lib/sendmail"
+    exit 2;  
+  fi  
+  if [ "$data_fim" == "" ] ; then 
+    data_fim="interrompido"
+  else
+    data_fim=`date`
+  fi
+  echo "enviando email notificando sucesso na realizacao do backup"
+  echo "incluindo $file_error_log"
+  sudo touch /tmp/message
+  sudo chmod 666 /tmp/message
+  MAILTO="gladiston@vidy.com.br"
+  COPYTO="suporte@vidy.com.br"
+  SUBJECT="[backup] $backup_title"
+  echo "Segue em anexo o log do backup" >/tmp/message
+  echo "=> $backup_title" >>/tmp/message
+  echo "que foi iniciado as $data_ini" >>/tmp/message
+  echo "e terminou (incluindo verificacao) as $data_fim" >>/tmp/message
+  # compactando o arquivo de log
+  #sudo zip -j /tmp/tape_list.zip $file_error_log
+  #sudo chmod 666 /tmp/tape_list.zip
+  # enviando mensagem
+  cat "$file_error_log" >>/tmp/message
+  if [ "$COPYTO" = "" ] ; then
+     mutt -s "$SUBJECT" "$MAILTO" < /tmp/message
+  else
+     mutt -s "$SUBJECT" -c "$COPYTO" "$MAILTO" < /tmp/message
+  fi
+  #if [ "$COPYTO" = "" ] ; then
+  #   mutt -s "$SUBJECT" -a $file_error_log "$MAILTO" < /tmp/message
+  #else
+  #   mutt -s "$SUBJECT" -a $file_error_log -c "$COPYTO" "$MAILTO" < /tmp/message
+  #fi
+ 
+  # se ponto_origem e/ou ponto_destino estiverem montados 
+  # entao desmonto-os
+  if [ "$ponto_origem" != "" ] && [ -d "$ponto_origem" ] ; then
+    do_desmontar "$ponto_origem"  
+  fi
+  
+  if [ "$ponto_destino" != "" ] && [ -d "$ponto_destino" ] ; then
+    do_desmontar "$ponto_destino"  
+  fi
+}
+
+function do_backup_esteservidor() {
+  log "**********************************************"
+  log "* SERVIDOR : $HOSTNAME     *"
+  log "**********************************************"
+  DO_BACKUP_STATUS_ESTESERVIDOR="S"
+  ponto_origem="/home" 
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+
+  # lista de pastas a serem backupeadas
+  unset backup_lista
+  # coloque as pastas em ordem de importancia
+  # ex.1 : todas as pastas :
+  #backup_lista=`ls -1 $ponto_origem`
+  # ex.2 : apenas agumas
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/administrador" )
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/servidor-antigo" )
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/wwwvidy" )
+  # conferindo se todos os diretorios requisitados existem
+  pastas_inexistentes=0
+  #for dir2bkp in "${backup_lista[@]}"; 
+  for dir2bkp in $backup_lista;
+  do
+    #dir2bkp="$ponto_origem/$dir2bkp"
+    if ! [ -d "$dir2bkp" ] ; then
+      log "A pasta para backup-$HOSTNAME [$dir2bkp] nao existe!"
+      pastas_inexistentes=1
+    fi
+  done
+  
+  if [ $pastas_inexistentes -gt 0 ] ; then
+    desmontar "$ponto_destino"
+    return;
+  fi
+ 
+  # realizando o backup
+  log "Iniciando backup-$HOSTNAME as $data_ini" 
+  DO_BACKUP_STATUS_ESTESERVIDOR="S"
+  for pak in "${backup_lista[@]}" ; do
+      do_copy "$pak" "$backup_folder" "N"
+      if [ "$RESULT_VALUE" = "OK" ] ; then
+        log "Backup de $pak para $backup_folder realizado com sucesso."
+      else
+        DO_BACKUP_STATUS_ESTESERVIDOR="N"  
+        log "Backup de $pak para $backup_folder reteve erros, verifique o log."
+      fi
+  done
+
+  ### desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+  
+function do_backup_superdog() {
+  log "***************************"
+  log "* SERVIDOR : SUPERDOG     *"
+  log "***************************"
+  DO_BACKUP_STATUS_SUPERDOG="S"
+  ponto_origem="root@192.168.1.254:/home" 
+
+  # definindo uma pasta temporaria local
+  temp_dir="/home/superdog/`date +%Y-%m-%d`"
+  if ! [ -d "$temp_dir" ] ; then
+    mkdir -p "$temp_dir" 
+  fi
+
+  # lista de pastas a serem transferidas para este servidor
+  unset backup_lista
+
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/administrador" )
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/servidor" )
+##  backup_lista=( "${backup_lista[@]}" "$ponto_origem/servidor-antigo" )
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/wwwvidy" )
+
+  # transferindo arquivos para uma pasta temporaria local
+  log "Iniciando backup-SUPERDOG as $data_ini" 
+  DO_BACKUP_STATUS_SUPERDOG="S"
+  for pak in "${backup_lista[@]}" ; do
+      rsync -rptvz "$pak" "$temp_dir"
+      RESULT_VALUE=$?
+      if [ "$RESULT_VALUE" = "0" ] ; then
+        log "Transferencia de $pak para $temp_dir realizado com sucesso."
+      else
+        DO_BACKUP_STATUS_SUPERDOG="N"  
+        log "Transferencia de $pak para $temp_dir reteve erros($RESULT_VALUE), verifique o log."
+      fi
+  done
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+
+  # realizando o backup das pastas transferidas 
+  # para a unidade removivel
+  unset backup_lista
+  backup_lista_file="/tmp/lista.backup.txt"
+  find "$temp_dir" -maxdepth 1 -type d >$backup_lista_file
+  while read pak ; do
+    echo "$pak = $temp_dir"
+    if [ "$pak" != "$temp_dir" ] && [ "$pak" != "$temp_dir/" ] ; then
+      do_copy_comprime "$pak" "$backup_folder/superdog" "tgz"
+      if [ "$RESULT_VALUE" = "OK" ] ; then
+        log "Backup de $pak para $backup_folder realizado com sucesso."
+        rm -fR "$pak"
+      else
+        DO_BACKUP_STATUS_SUPERDOG="N"  
+        log "Backup de $pak para $backup_folder reteve erros, verifique o log."
+      fi
+    fi
+  done < $backup_lista_file
+
+  [ -f "$backup_lista_file" ] && rm -f "$backup_lista_file"
+
+  ### desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+ 
+
+function do_backup_firebirdsql() {
+  log "****************************************************"
+  log "* BACKUP DO SERVIDOR DE BANCO DE DADOS FIREBIRDSQL *"
+  log "****************************************************"
+  DO_BACKUP_STATUS_FIREBIRD="S"
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    desmontar "$ponto_destino"
+    return;
+  fi
+  DO_BACKUP_STATUS_FIREBIRDSQL="S"  
+  # lista de databases do firebird a serem backupeados
+  # coloque os databases em ordem de importancia
+  # lista de pastas a serem backupeadas
+  unset backup_lista
+  backup_lista=( "${backup_lista[@]}" "192.168.1.14:admin1.fdb" )
+  #backup_lista=( "${backup_lista[@]}" "192.168.1.14:security2.fdb" )
+  #backup_lista=( "${backup_lista[@]}" "192.168.1.14:c:/Arquivos de programas/Firebird/Firebird_2_1/security2.fdb" )
+  #backup_lista=( "${backup_lista[@]}" "192.168.1.14:/var/lib/firebird2/system/security.fdb" )
+
+  for fb_source in "${backup_lista[@]}" ; do  
+    # o nome do arquivo de backup sera praticamente o mesmo
+    # nome da origem, apenas o sufixo .fbk para diferenciar
+    # e os _ que subsituirao caracteres especiais
+    fb_dest="$fb_source"
+    fb_dest=${fb_dest//.fb/\.fbk}
+    fb_dest=${fb_dest//.fdb/\.fbk}
+    fb_dest=${fb_dest//.dat/\.fbk}
+    fb_dest=${fb_dest//.gdb/\.fbk}
+    # trocando / por _
+    fb_dest=${fb_dest//\//\_}
+    # trocando : por apenas -
+    fb_dest=${fb_dest//:/\-}
+    # trocando \\ por apenas -
+    fb_dest=${fb_dest//\\/\-}
+    # trocando -_ por apenas -  
+    fb_dest=${fb_dest//-_/\-}
+    # acrescentando o path de destino
+    fb_dest="$backup_folder/firebird/$fb_dest"
+    fb_folder=`dirname "$fb_dest"`
+    if ! [ -d "$fb_folder" ] ; then
+      mkdir -p "$fb_folder"
+    fi
+    log "Processando backup de  \"$fb_source\" para \"$fb_dest\""
+    /usr/bin/gbak -t -user "$FB_USER" -password "$FB_PASSWORD" "$fb_source" "$fb_dest" 2>>$file_error_log
+    if [ $? -ne 0 ] ; then
+      log "[backup-falhou] firebird : gbak -v -t -user \"$FB_USER\" -password \"*****\" \"$fb_source\" \"$fb_dest\""
+      DO_BACKUP_STATUS_FIREBIRDSQL="N"
+    else
+      log "[sucesso] firebird : backup de \"$fb_source\" para \"$fb_dest\""
+    fi
+  done
+
+  ### desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+
+function do_backup_mssql() {
+  log "**********************************************"
+  log "* BACKUP DO SERVIDOR DE BANCO DE DADOS MSSQL *"
+  log "**********************************************"
+  DO_BACKUP_STATUS_MSSQL="S"
+  agente_user="proxy_backup"
+  agente_pass="proxy123backup"
+  agente_dom="vidylab.com.br"
+  NOVA_PASTA="$backup_folder/mssql65"
+  ponto_rede_mssql="//192.168.1.14/sqlbackup"
+  DO_BACKUP_STATUS_MSSQL="S" 
+  # montando a unidade de origem
+  ponto_origem="/mnt/mssql"
+  if ! [ -d "$ponto_origem" ] ; then
+    mkdir -p "$ponto_origem"
+  fi
+  
+  do_montar_cifs "$ponto_rede_mssql" "$ponto_origem"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    log "[backup-falhou] mssql : Não foi possivel montar a unidade de origem [$ponto_rede_mssql] "
+    return
+  fi 
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    desmontar "$ponto_destino"
+    return
+  fi  
+
+  if ! [ -d "$NOVA_PASTA" ] ; then
+    mkdir -p "$NOVA_PASTA"
+  fi
+  
+  ARQ_ATUAL="$ponto_origem/backup_total.DAT"
+  NOME_ARQUIVO=`basename "$ARQ_ATUAL"`
+  # verifica se havia arquivos para serem copiados la\
+  if [ -s "$ARQ_ATUAL" ] ; then
+     gzip -c "$ARQ_ATUAL" >"$NOVA_PASTA/$NOME_ARQUIVO.gz"
+     if [ $? -ne 0 ] ; then
+        log "[backup-falhou] : erro ao copiar [$ponto_rede_mssql/$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz]"
+        DO_BACKUP_STATUS_MSSQL="N" 
+     else
+        log "[sucesso] : Backup de[$ponto_rede_mssql/$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz] feito com sucesso."
+        # se o backup foi feito com sucesso entao remove o backup do servidor mssql, pois o mesmo
+        # sera recirado conforme a programacao no servidor
+        rm -f "$ARQ_ATUAL"
+        if [ $? -ne 0 ] ; then
+          log "  Porem não foi possivel eliminar [$ponto_rede_mssql/$ARQ_ATUAL] após a cópia."
+        fi
+     fi
+  else
+    DO_BACKUP_STATUS_MSSQL="N"
+    log "Nao havia backups realizados no mssql6.5 para serem copiados."
+  fi
+
+  # desmontando a unidade de origem
+  do_desmontar "$ponto_origem"
+
+  ### desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+
+function do_backup_eldorado() {
+  #clear
+  agente_user="proxy_backup"
+  agente_pass="proxy123backup"
+  agente_dom="vidylab.com.br"
+  DO_BACKUP_STATUS_ELDORADO="S"
+  log "*******************************"
+  log "* BACKUP DO SERVIDOR ELDORADO *"
+  log "*******************************"
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    desmontar "$ponto_destino"
+    return;
+  fi 
+
+  # lista de pastas a serem backupeadas
+  unset backup_lista
+  backup_lista=( "${backup_lista[@]}" "//eldorado/almox" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/fabrica" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/pierre" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/desenv" )
+  #backup_lista=( "${backup_lista[@]}" "//eldorado/equipamentos" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/financeiro" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/orcamentos" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/mktg" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/rh" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/vendas" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/compras" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/suporte" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/telef" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/custos" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/sergio" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/obras" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/rudd" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/asstec" )
+  backup_lista=( "${backup_lista[@]}" "//eldorado/ctb" )
+  #backup_lista=( "${backup_lista[@]}" "//eldorado/sis" )
+
+  # realizando o backup dos volumes alistados acima
+  log "Iniciando backup-eldorado as $data_ini" 
+  DO_BACKUP_STATUS_ELDORADO="S"
+  for pak in "${backup_lista[@]}" ; do
+    # montando a unidade de origem (eldorado)
+    ponto_origem="/mnt/eldorado_`basename $pak`"
+    if ! [ -d "$ponto_origem" ] ; then
+      sudo mkdir -p "$ponto_origem"
+      sudo chmod 2777 "$ponto_origem"
+    else
+      do_desmontar "$ponto_origem"
+    fi
+    echo "realizando backup de : $pak"
+    do_montar_cifs "$pak" "$ponto_origem"
+    if [ "$RESULT_VALUE" = "OK" ] ; then
+      do_copy "$ponto_origem" "$backup_folder" "S"
+      if [ "$RESULT_VALUE" = "OK" ] ; then
+        log "Backup de $pak para $backup_folder realizado com sucesso."
+      else
+        DO_BACKUP_STATUS_ELDORADO="N"  
+        log "Backup de $pak para $backup_folder reteve erros, verifique o log."
+      fi
+      sleep 5s
+      do_desmontar "$ponto_origem"
+    fi
+  done
+
+  # desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+
+function do_backup_brasilinfo() {
+  agente_user="proxy_backup"
+  agente_pass="proxy123backup"
+  agente_dom="vidylab.com.br"
+  log "**********************************"
+  log "* BACKUP DO SERVIDOR BRASIL-INFO *"
+  log "**********************************"
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    desmontar "$ponto_destino"
+    return;
+  fi 
+
+  # lista de pastas a serem backupeadas
+  unset backup_lista
+  backup_lista=( "${backup_lista[@]}" "//brasilinfo/sis" )
+  #backup_lista=( "${backup_lista[@]}" "//brasilinfo/sis" )
+
+  # realizando o backup dos volumes alistados acima
+  log "Iniciando backup-brasilinfo as $data_ini" 
+  DO_BACKUP_STATUS_BRASILINFO="-"
+  for pak in "${backup_lista[@]}" ; do
+    # montando a unidade de origem (eldorado)
+    ponto_origem="/mnt/brasilinfo_`basename $pak`"
+    if ! [ -d "$ponto_origem" ] ; then
+      sudo mkdir -p "$ponto_origem"
+      sudo chmod 2777 "$ponto_origem"
+    else
+      do_desmontar "$ponto_origem"
+    fi
+    echo "realizando backup de : $pak"
+    do_montar_cifs "$pak" "$ponto_origem"
+    if [ "$RESULT_VALUE" = "OK" ] ; then
+      do_copy "$ponto_origem" "$backup_folder" "S"
+      if [ "$RESULT_VALUE" = "OK" ] ; then
+        log "Backup de $pak para $backup_folder realizado com sucesso."
+        [ "$DO_BACKUP_STATUS_BRASILINFO" = "-" ] && DO_BACKUP_STATUS_BRASILINFO="S"
+      else
+        DO_BACKUP_STATUS_BRASILINFO="N"  
+        log "Backup de $pak para $backup_folder reteve erros, verifique o log."
+      fi
+      sleep 5s
+      do_desmontar "$ponto_origem"
+    fi
+  done
+
+  # desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+
+function do_backup_alterdata() {
+  agente_user="proxy_backup"
+  agente_pass="proxy123backup"
+  agente_dom="vidylab.com.br"
+  DO_BACKUP_STATUS_ALTERDATA="N"  
+  log "********************************"
+  log "* BACKUP DO SERVIDOR ALTERDATA *"
+  log "********************************"
+
+  # montando a unidade de destino, normalmente o usbdisk
+  do_montar_dev "$ponto_device" "$ponto_destino"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+    desmontar "$ponto_destino"
+    return;
+  fi 
+
+  # Montando a unidade do servidor AVALON
+  ponto_origem="/mnt/alterdata"
+  if ! [ -d "$ponto_origem" ] ; then
+    sudo mkdir -p "$ponto_origem"
+    sudo chmod 2777 "$ponto_origem"
+  fi
+
+  avalon_share="//avalon/alterdat"
+  do_montar_cifs "$avalon_share" "$ponto_origem"
+  if [ "$RESULT_VALUE" != "OK" ] ; then
+     log "Backup de $pak para $backup_folder reteve erros, verifique o log."
+     sleep 5s
+     do_desmontar "$ponto_origem"
+     return
+  fi
+
+  # lista de pastas a serem backupeadas
+  unset backup_lista
+  backup_lista=( "${backup_lista[@]}" "$ponto_origem/DB" )
+
+  # realizando o backup dos volumes alistados acima
+  log "Iniciando backup-alterdata ($avalon_share) as $data_ini" 
+  DO_BACKUP_STATUS_ALTERDATA="S"
+  for pak in "${backup_lista[@]}" ; do
+    echo "realizando backup de : $pak"
+    # fazendo o backup
+    do_copy "$ponto_origem" "$backup_folder" "S"
+    [ "$RESULT_VALUE" != "OK" ] && DO_BACKUP_STATUS_ALTERDATA="N"
+  done
+
+  # desmontando a unidade de destino
+  do_desmontar "$ponto_destino"
+}
+
+
+############################
+# Inicio do Programa       #
+############################
+
+export LANGUAGE="pt_BR:pt:pt_PT"
+export LANG="pt_BR.UTF-8"
+
+tape_operator='administrador'
+tape_group='nogroup'
+tape_prioridade=0
+
+FB_USER='SYSDBA'
+FB_PASSWORD='masterkey'
+
+modo_automatico="1"
+ponto_device=""
+ponto_fs_detectar="Linux"
+ponto_rede_smb=""
+ponto_rede_nfs=""
+ponto_origem=""
+
+
+#
+# Preparando o backup
+#
+
+#########################################################
+# acrescentando arquivo header proprio para discos USBs #
+#########################################################
+. /home/servidor/scripts/usbdisk_header.sh
+  
+#clear
+
+# eliminando arquivos temporarios
+sudo rm -f /tmp/tape_list.zip 
+sudo rm -f /tmp/message
+
+# verificando o dia da semana
+# 1=segunda...7=domingo
+dia_semana=`date +%u`
+
+#
+# variaives importantes que definem destino do backup
+# titulos, etc...
+backup_cronfile="/home/administrador/backup/cron.txt"
+#backup_title="backup-servidores-$HOSTNAME-`date +%Y-%m-%d`"
+backup_title="backup-`date +%Y-%m-%d`"
+backup_lista_negra="/home/administrador/backup/backup_lista_negra.txt"
+backup_log_folder="/home/administrador/backup/`date +%Y-%m`";
+file_error_log="$backup_log_folder/$backup_title.log"
+backup_folder="$ponto_destino/`date +%Y-%m-%d`"
+backup_inicio="`date +%Y-%m-%d+%H:%M`"
+data_ini="`date +%Y-%m-%d+%H:%M`"
+# verificando a presenca do arquivo backup-cron
+if ! [ -f "$backup_cronfile" ] ; then
+    sudo touch $backup_cronfile
+    sudo chown administrador $backup_cronfile
+    sudo chmod 660 $backup_cronfile
+fi
+
+if [ -f "$file_error_log" ] ; then 
+  rm -f "$file_error_log"
+  touch "$file_error_log"
+  chmod 666 "$file_error_log"
+  echo "Lista de arquivos que nao serao copiados :">>"$file_error_log"
+  cat /home/administrador/backup/backup_lista_negra.txt >>"$file_error_log"
+fi
+
+# Antes de prosseguir com o Backup precisamos
+# checar a integridade do disco USB
+# e repara-lo caso haja problemas
+if [ "$REPARAR_DISCO_USB" == "S" ] ; then
+    ### desmontando a unidade USB se ela estiver montada
+    if [ "`mount |grep $ponto_device|wc -l`" -gt 0 ] ; then
+      umount $ponto_device
+    fi
+    /home/administrador/scripts/reparar_usbdisk.sh "$ponto_device"
+    # aguarda uns 30 segundos
+    sleep 30;
+fi
+
+# verificando se o ponto de montagem existe, se nao existir entao cria
+if ! [ -d $ponto_destino ] ; then
+  mkdir -p $ponto_destino
+fi
+
+### desmontando a unidade USB se ela estiver montada
+if [ "$ponto_device" != "" ] ; then
+  if [ "`mount |grep $ponto_device|wc -l`" -gt 0 ] ; then
+    umount $ponto_device
+  fi
+fi
+
+# montando a unidade de destino, normalmente o usbdisk
+do_montar_dev "$ponto_device" "$ponto_destino"
+if [ "$RESULT_VALUE" != "OK" ] ; then
+  do_sendmail;
+  exit 1;
+fi
+
+# ceritificando de que a unidade montada corresponde corretamente ao
+# dia da semana que estamos
+if ! [ -f $ponto_destino/vol_$dia_semana.txt ] ; then
+  log "A unidade de backup foi montada com sucesso, no entanto, esta unidade nao corresponthunderbird-obras.zipde a unidade desejada !"
+  log "A unidade de backup foi montada com sucesso, no entanto, esta unidade nao corresponde a unidade desejada !"
+  log "Certifique-se que :"
+  log "- tenha colocado a unidade correta na unidade."
+  log "  hoje e' `date +%a` ou dia da semana numero `date +%u`."
+  log "  entao a unidade que deveria estar ligado deve ter "
+  log "  na sua etiqueta esta data ou numero."
+  log "- ou talvez, por engano alguem deve ter apagado o arquivo : "
+  log "  $ponto_destino/vol_$dia_semana.txt"
+  log "  que havia nessa unidade de backup."
+  do_sendmail;
+  if [ "$ponto_device" != "" ] ; then
+    sudo umount $ponto_destino
+    exit 1;
+  fi
+fi
+
+# atualizando data dos arquivos de indices na unidade usb
+# para que sempre reflitam a data do ultima tentativa de backup
+sudo touch $ponto_destino/vol_1.txt
+sudo touch $ponto_destino/vol_3.txt
+sudo touch $ponto_destino/vol_5.txt
+sudo touch $ponto_destino/vol_7.txt
+sudo touch $ponto_destino/vol_vidy.txt
+sudo touch $ponto_destino/seg_qua_sex.txt
+sudo chmod 666 $ponto_destino/vol_1.txt
+sudo chmod 666 $ponto_destino/vol_3.txt
+sudo chmod 666 $ponto_destino/vol_5.txt
+sudo chmod 666 $ponto_destino/vol_7.txt
+sudo chmod 666 $ponto_destino/vol_vidy.txt
+sudo chmod 666 $ponto_destino/seg_qua_sex.txt
+
+log "Iniciando backup as $data_inicio"
+
+# criando algumas pastas e arquivos
+if ! [ -d "$backup_folder" ] ; then
+  echo "criando pasta $backup_folder"
+  sudo mkdir -p "$backup_folder"
+  if [ $? -ne 0 ] ; then
+    log "[backup-falhou] : erro ao criar pasta $backup_folder"
+  else
+    sudo chown $tape_operator.$tape_group "$backup_folder"
+    sudo chmod 2777 "$backup_folder"
+    echo -n "pasta criada."  
+  fi
+fi
+
+if ! [ -d "$backup_log_folder" ] ; then
+  sudo mkdir -p "$backup_log_folder"
+  sudo chmod 2777 "$backup_folder"
+  sudo chown $tape_operator.$tape_group $backup_log_folder
+fi
+
+# eliminado arquivos desnecessarios (se existir)  
+sudo rm -fv /tmp/tape_list.zip
+sudo rm -fv /tmp/message
+
+
+# preparando arquivo de log
+sudo touch $file_error_log
+sudo chown $tape_operator.$tape_group $file_error_log
+
+# no relatorio final acrescentando o espaco disponivel
+# antes de iniciar o backup :
+log "-"
+log ".   Espaco na unidade $ponto_device antes de iniciar o backup :" 
+log ".  `df -h $ponto_device|grep \"Uso\%\"`"
+log ".  `df -h $ponto_device|grep \"$ponto_device\"`"
+log "-" 
+
+### desmontando a unidade USB se ela estiver montada
+if [ "$ponto_device" != "" ] ; then 
+  if [ "`mount |grep $ponto_device|wc -l`" -gt 0 ] ; then
+    sudo umount $ponto_device
+  fi
+fi
+
+echo "Arquivo de log sera gerado em :"
+echo "=>$file_error_log"
+
+#
+# Variaveis importantes
+#
+
+data_ini=`date +%d-%m-%Y+%H:%M` 
+
+# variaveis com status se o backup
+# foi bem sucedido ou nao
+DO_BACKUP_STATUS_ESTESERVIDOR="N"
+DO_BACKUP_STATUS_SUPERDOG2="N"
+DO_BACKUP_STATUS_FIREBIRDSQL="N"
+DO_BACKUP_STATUS_MSSQL="N"
+DO_BACKUP_STATUS_ELDORADO="N"
+DO_BACKUP_STATUS_BRASILINFO="N"
+DO_BACKUP_STATUS_ALTERDATA="N"
+# Identificando os backups que serao realizados
+REPARAR_DISCO_USB="S"
+DO_BACKUP_ESTESERVIDOR="S"
+#DO_BACKUP_SUPERDOG="S"
+DO_BACKUP_MSSQL="S"
+DO_BACKUP_FIREBIRDSQL="S"
+#DO_BACKUP_ELDORADO="S"
+DO_BACKUP_BRASILINFO="S"
+DO_BACKUP_ALTERDATA="S"
+
+log "[inicio] Relatorio do backup $backup_title iniciado em $data_ini :" 
+
+if [ "$DO_BACKUP_ALTERDATA" = "S" ] ; then
+  do_backup_alterdata
+  if [ "$DO_BACKUP_STATUS_ALTERDATA" = "S" ] ; then
+    log ".  Servidor ALTERDATA........................OK" 
+  else
+    log ".  Servidor ALTERDATA........................FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+if [ "$DO_BACKUP_FIREBIRDSQL" = "S" ] ; then
+  do_backup_firebirdsql
+  if [ "$DO_BACKUP_STATUS_FIREBIRDSQL" = "S" ] && [ "$DO_BACKUP_FIREBIRDSQL" = "S" ]; then
+    log ".  Servidor FirebirdSQL...............OK" 
+  else
+    log ".  Servidor FirebirdSQL...............FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+if [ "$DO_BACKUP_MSSQL" = "S" ] ; then
+  do_backup_mssql
+  if [ "$DO_BACKUP_STATUS_MSSQL" = "S" ] ; then
+    log ".  Servidor TERRA MSSQL.....................OK"
+  else
+    log ".  Servidor TERRA MSSQL.....................FALHOU"
+  fi
+fi
+
+if [ "$DO_BACKUP_BRASILINFO" = "S" ] ; then
+  do_backup_brasilinfo
+  if [ "$DO_BACKUP_STATUS_BRASILINFO" = "S" ] ; then
+    log ".  Servidor BRASILINFO........................OK" 
+  else
+    log ".  Servidor BRASILINFO........................FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+if [ "$DO_BACKUP_ELDORADO" = "S" ] ; then
+  do_backup_eldorado
+  if [ "$DO_BACKUP_STATUS_ELDORADO" = "S" ] ; then
+    log ".  Servidor ELDORADO........................OK" 
+  else
+    log ".  Servidor ELDORADO........................FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+if [ "$DO_BACKUP_ESTESERVIDOR" = "S" ] ; then
+  do_backup_esteservidor
+  if [ "$DO_BACKUP_STATUS_ESTESERVIDOR" = "S" ] ; then
+    log ".  Este servidor $HOSTNAME.................OK" 
+  else
+    log ".  Este servidor $HOSTNAME.................FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+if [ "$DO_BACKUP_SUPERDOG" = "S" ] ; then
+  do_backup_superdog
+  if [ "$DO_BACKUP_STATUS_SUPERDOG" = "S" ] ; then
+    log ".  Este servidor SUPERDOG.................OK" 
+  else
+    log ".  Este servidor SUPERDOG.................FALHOU (parcial ou total, confira tag [backup-falhou])" 
+  fi
+fi
+
+echo "preparando um relatorio para envio..."
+data_fim=`date +%d-%m-%Y+%H:%M` 
+
+log "[fim] $backup_title iniciado em $data_ini ate $data_fim"
+
+do_sendmail;
+
+# elimina arquivos temporarios
+[ -f /tmp/tape_list.zip ] && rm -f /tmp/tape_list.zip
+[ -f /tmp/message ] && rm -f /tmp/message
+
+# Fim do Programa

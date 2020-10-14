@@ -1,0 +1,63 @@
+#
+# Lista de portas com acesso liberado.
+# Libera qualquer acesso de entrada ou saída envolvendo
+# as portas relacionados.
+# Para a correta funcionalidade deste arquivo especifique a porta
+# seguido de # (remark) comentando o porque ou o serviço que precisa
+# dessa liberação. Ex :
+# tcp|22 # ssh
+# Nota : Parametros devem ser separados por "|" e o formato é o seguinte :
+# Parametro 1 : Protocolo, pode ser apenas tcp ou udp
+# Parametro 2 : a porta a ser liberada
+tcp|21 # ftp
+tcp|22 # ssh
+tcp|23 # ftp
+tcp|25 # smtp
+tcp|53 # dns
+udp|53 # dns
+tcp|80 # http
+tcp|110 # pop3
+tcp|143 # imap
+tcp|443 # https
+tcp|587 # smtp
+#tcp|3050  # firebird
+#tcp|1433  # mssql
+#tcp|3128  # squid
+tcp|2631 # caixa
+tcp|993  # gmail
+tcp|995  # gmail
+tcp|465  # gmail
+tcp|587  # gmail
+tcp|3389  # rdp
+tcp|5800  # vnc
+tcp|5900  # vnc
+tcp|3336 # sped contabil
+tcp|3443 # sped contabi
+tcp|3456  # sped fiscal
+tcp|8017 # receitanet
+#tcp|1863   # messenger.hotmail.com
+#tcp|5222   # talk.google.com
+#tcp|10000 # webmin
+#tcp|8080  # http
+#udp|123   # ntp
+#tcp|10000 # servidores
+#tcp|10001 # servidores
+#tcp|10002 # servidores
+#tcp|10003 # servidores
+#tcp|10004 # servidores
+#tcp|10005 # servidores
+#tcp|10006 # servidores
+#tcp|10007 # servidores
+#tcp|10008 # servidores
+#tcp|10009 # servidores
+#tcp|10010 # servidores
+#tcp|10011 # servidores
+#tcp|10012 # servidores
+#tcp|10013 # servidores
+#tcp|10014 # servidores
+#tcp|10015 # servidores
+#tcp|10016 # servidores
+#tcp|10017 # servidores
+#tcp|10018 # servidores
+#tcp|10019 # servidores
+#tcp|10020 # servidores

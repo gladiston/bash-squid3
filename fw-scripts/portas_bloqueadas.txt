@@ -1,0 +1,19 @@
+#
+# Lista de portas com acesso bloqueado.
+# Bloqueia qualquer acesso de entrada ou saída envolvendo
+# as portas relacionados.
+# Para a correta funcionalidade deste arquivo especifique a porta
+# seguido de # (remark) comentando o porque da necessidade do bloqueio. 
+# Se necessitar um range de portas poderá usar dois pontos (:). Ex:
+# 33435:33525 # Traceroute
+# 31337 # bloqueio Back Orifice
+# 5999:6003 # Servidor X
+# Nota: Use uma porta ou range de portas por linha
+33435:33525 # Traceroute
+31337 # bloqueio Back Orifice
+1524  # bloqueio TRIN00
+27665 # bloqueio TRIN00
+27444 # bloqueio TRIN00
+31335 # bloqueio TRIN00
+139 # Sistemas Windows
+455 # Sistemas Windows 

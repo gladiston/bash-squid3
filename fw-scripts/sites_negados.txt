@@ -1,0 +1,7 @@
+#
+# Lista de Sites com acesso bloqueado.
+# Bloqueia qualquer acesso de entrada ou saída envolvendo
+# os sites relacionados.
+# Para a correta funcionalidade deste arquivo especifique o site
+# seguido de # (remark) comentando o porque da necessidade do bloqueio. Ex :
+sexoagora.net  # site adulto de sexo

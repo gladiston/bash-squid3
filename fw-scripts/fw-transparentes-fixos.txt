@@ -1,0 +1,59 @@
+#
+# Lista de IPs com navegacao transparente
+# Uma navegacao transparente nao requer o uso de proxy configurado e
+# qualquer aplicativo do usuario acessa de forma transparente como
+# se estivesse ligado diretamente a internet.
+# Para a correta funcionalidade deste arquivo especifique o IP
+# seguido de # (remark) comentando o porque da necessidade
+# de IP transparente para essa pessoa/estacao, ex :
+# 192.168.1.2  # DC1
+# 192.168.1.3  # DC2
+# Nota 1 : use apenas um IP por linha
+# Nota 2 : Este arquivo é fixo, portanto, use apenas com maquinas que
+#          possuam IP fixo configurado no servidor DHCP.
+#192.168.1.1  # Roteador Telefonica
+#192.168.1.2  # DC1
+#192.168.1.3  # DC2
+#192.168.1.4  # Obelix (Bond)
+#192.168.1.5  # Obelix 1
+192.168.1.6  # Obelix 2
+192.168.1.7  # Obelix 3
+192.168.1.8  # Obelix 4
+192.168.1.9  # Eldorado
+#192.168.1.10 # Virtual
+#192.168.1.11 # Abaco
+#192.168.1.12 # WSUS
+192.168.1.13 # Servidor de testes
+#192.168.1.14 # Servidor TERRA (Virtual)
+#192.168.1.15 # Servidor ObelixDC2
+#192.168.1.18 # Servidor Virtual #2
+192.168.1.22 # GVW_VENDAS
+#192.168.1.23 # GVW_CPD
+192.168.1.50 # Gladiston, testes de internet constante
+#192.168.1.51 # Gladiston via Wifi
+#192.168.1.52 # Gladiston via Celular
+#192.168.1.254 # Firewall/Proxy
+192.168.1.55 # Marcelo/Suporte
+192.168.1.60 # Sergio, LAN, diretor navega sem senha
+192.168.1.61 # Sergio, WIFI, diretor navega sem senha
+192.168.1.62 # Sergio, Ipad2
+192.168.1.63 # Sergio, Iphone
+192.168.1.66 # notebook do Jose Carlos via LAN
+192.168.1.67 # notebook do Jose Carlos via Wifi
+192.168.1.71 # Pierre com notebook - Lan
+192.168.1.72 # Pierre com notebook - Wifi
+192.168.1.73 # Pierre com Celular Samsung Galaxy S2
+#192.168.1.140 #Ambrosina mandando declaracoes 22/11/2012
+#192.168.1.113 #Ferreira Conectividade Social 19/09/2012
+#192.168.1.139 #Fabio testando programa 14/12/2012
+#192.168.1.121 #instalacao de programas no PC da Delmice 10/10/2012
+#192.168.1.140 #instalacao na VM Cleiton
+#192.168.1.124 #Cleu Conectividade Social 04/12/2012
+#192.168.1.113 #Ferreira Conectividade Social 04/11/2012
+#192.168.1.118 # Teste na VM do Cleiton 22/11/2012
+
+192.168.1.111 # Teste do Gladiston em 14/12/2012
+#192.168.1.132 # Teste do Gladiston 08/02/2013
+#192.168.1.110 # Teste do Gladiston para o servidor de backup
+#192.168.1.123
+#192.168.1.135 # Fábio, contabilidade sistema e-fiscal.

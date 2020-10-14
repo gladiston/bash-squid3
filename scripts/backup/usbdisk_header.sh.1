@@ -1,0 +1,109 @@
+#!/bin/bash
+# Script desenvolvido por :
+# Gladiston Hamacker Santana <gladiston.santana@gmail.com>
+# Data : 02/02/2006
+# Uso : Arquivo de cabecalho para as operacoes com unidades de
+#       discos externas USB. Coloque a chamada no inicio do 
+#       seu script assim :
+####
+# Agora no seu script voce poderá fazer assim
+# ./ usbdisk_header.sh
+#
+# sudo mount -t $ponto_fs $ponto_device $ponto_destino \
+#    -o sync,nosuid,nouser,rw,dirsync,users
+#
+# sudo fsck -vfy $ponto_device
+#
+# ou qualquer outra operacao com o disco usb
+####
+#
+#
+# Dependencias :
+#   sharutils zip fdisk sudoers
+#
+
+# Inicio do Programa
+
+# Programa 'blkid' é usado para detectar os discos pludados por UUID
+# ele é mais confiavel do que usar o diretorio /dev/disk/disk-by-uuid
+BLKID="/sbin/blkid"
+# Essas 3 variaveis poderao ser utilizadas por outros programas que
+# manipulam unidades USB
+# Assim conseguimos usar apenas discos de backup da propria VIDY
+# e de maneira uniforme em todos os scripts
+ponto_device=""
+ponto_fs=auto
+ponto_montagem=/home/mnt/usbdisk
+
+# discos de backups utilizados aqui na VIDY
+disco[0]="c7cb4979-328f-4f25-a3c1-c784556aa3fc" # superdog-01
+disco[1]="c3900f49-f465-4a55-9347-97726ad250a8" # superdog-02
+
+# Procura se algum dos discos alistados para backup estao presentes no sistema
+ponto_device=""
+tmpfile=$(mktemp "/tmp/xendisk.XXXXXXXXXX")
+$BLKID |grep "UUID">$tmpfile
+while read line ; do
+  disk_device=""
+  disk_label=""
+  disk_uuid=""
+  disk_type="" 
+  disk_device=$(eval echo $line|cut -d ":" -f1) 
+  [[ "$line" =~ "LABEL=" ]] && disk_label=$(eval echo ${line#*LABEL=}|cut -d " " -f1|tr -d "\"")
+  [[ "$line" =~ "UUID=" ]] && disk_uuid=$(eval echo ${line#*UUID=}|cut -d " " -f1|tr -d "\"")
+  [[ "$line" =~ "TYPE=" ]] && disk_type=$(eval echo ${line#*TYPE=}|cut -d " " -f1|tr -d "\"")    
+  # debug :
+  #echo "uuid=$disk_uuid,label=$disk_label,type=$disk_type,device=$disk_device"
+  for uuid in "${groupdisk[@]}" ; do
+    if [ "$uuid" = "$disk_uuid" ] ; then  
+      ponto_device="$disk_device"
+      break
+    fi
+  done
+done <$tmpfile
+[ -f "$tmpfile" ] && rm -f "$tmpfile"
+
+### se nao foi encontrado nenhum disco entao abandona 
+### o script.
+if [ "$ponto_device" = "" ] ; then
+  echo "Nenhuma unidade de backup foi detectada!"
+  exit 2;
+else
+  echo "UDEV midia de backup detectado em $ponto_device"
+fi
+
+# verificando se a particao existe realmente
+fs_existe=`/sbin/fdisk -l|grep $ponto_device|wc -l`
+if [ "$fs_existe" -eq 0 ] ; then
+  echo "A particao indicada nao existe :"
+  echo $ponto_device
+  echo "operacao abortada !";
+  exit 1;
+fi;
+
+### o disco detectado nao pode estar montado
+### isso previne que discos que façam parte do
+### sistema -que nascem montados- nao sejam escaneados
+fs_existe=`/bin/mount|grep $ponto_device|wc -l`
+if [ $fs_existe -gt 0 ] ; then
+  echo "A particao indicada ja existe e esta montada :"
+  echo $ponto_device
+fi;
+
+### desmontando a unidade USB se ela estiver montada
+if [ "`mount |grep $ponto_device|wc -l`"  -gt 0 ] ; then
+  sudo umount $ponto_device
+  if [ $? -ne 0 ] ; then
+    echo "Erro ao tentar desmontar $ponto_device."
+    echo "desmonte-a manualmente e repita a operacao."
+    echo "operacao cancelada."
+    exit 2;
+  fi
+fi
+
+ponto_destino="$ponto_montagem"
+if ! [ -d "$ponto_destino" ] ; then
+  sudo mkdir -p "$ponto_destino" 
+  sudo chmod 2777 "$ponto_destino"
+fi
+

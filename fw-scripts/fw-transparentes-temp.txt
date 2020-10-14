@@ -1,0 +1,13 @@
+# Lista de IPs com navegacao transparente de forma temporaria valida até
+# as 23:59 hrs do mesmo dia.
+# Uma navegacao transparente nao requer o uso de proxy configurado e
+# qualquer aplicativo do usuario acessa de forma transparente como
+# se estivesse ligado diretamente a internet.
+# Para a correta funcionalidade deste arquivo especifique o IP
+#192.168.1.122 #Teste de Contabilidade 15/10/2012
+#192.168.1.131 # Del teste das normas ABNT 14/11/2012
+#192.168.1.141 # DCTF Ambrosina
+#192.168.1.126 #Fabio (CNPJ)
+#192.168.1.110 # Andre
+192.168.1.133 # Cleu/RH
+#192.168.1.110

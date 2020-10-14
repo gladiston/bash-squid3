@@ -1,0 +1,42 @@
+#
+# Alem de mencionar os redirecionamentos, é
+# necessario liberar essas mesmas portas em :
+# /home/administrador/fw-scripts/config/portas_liberadas.txt
+#
+# proto|porta_local|redirecionar_toip|desc_serv|hostname
+
+# admin remota avalon_alterdata
+#tcp|10000|192.168.1.254:22|SSH|SUPERDOG
+#tcp|10002|192.168.1.2:3389|RDP|dc1
+#tcp|10005|192.168.1.5:3389|RDP|asterix
+#tcp|10015|192.168.1.15:3389|RDP|atlantis
+#tcp|10017|192.168.1.17:3389|RDP|avalon
+tcp|3389|192.168.1.254:3389|RDP|superdog
+
+# redicionar VNC para Avalon/Alterdata
+#tcp|5900|192.168.1.15:5900|VNC|avalon
+#tcp|5800|192.168.1.15:5800|VNC|avalon
+
+# Redireciona as conexões HTTP
+tcp|80|192.168.1.254|WebServer|VIDY2
+
+# Redireciona as conexões SMTP
+#tcp|25|192.168.1.254|SMTP|VIDY2
+
+# Redireciona as conexões POP3
+#tcp|110|192.168.1.254|POP3|VIDY2
+
+# Redireciona as conexões IMAP
+#tcp|143|192.168.1.254|IMAP|VIDY2
+
+# Redireciona as conexões SSH
+#tcp|22|192.168.1.254|SSH|VIDY2
+
+# Redireciona as conexões Firebird
+#tcp|3050|192.168.1.14|Firebird|TERRA
+
+# Redireciona as conexões MSSQL
+#tcp|1433|192.168.1.14|MSSQL|TERRA
+
+# Redireciona as conexões RDP
+tcp|10000|192.168.1.6:389|RDP|OBELIX

@@ -1,0 +1,665 @@
+#!/bin/bash
+
+# trap ctrl-c and call ctrl_c() trap ctrl_c INT
+trap ctrl_c INT
+function ctrl_c() { 
+  echo "*** script interrompido pelo usuario ***" ;
+  do_sendmail;
+  exit 1;
+}
+
+function do_submenu(){
+  arquivo="$1"
+  diretorio=`dirname "$arquivo"`
+  if [ "$diretorio" != "$MENUDIR" ] ; then
+     arquivo="$MENUDIR/$arquivo"
+  fi
+
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+
+  clear;
+  CONTINUAR="S"
+  if ! se_acesso_remoto ; then 
+    echo "Os parametros de firewall nao permitem que certas operacoes"
+    echo "sejam realizados localmente, mas podera executar essas operacoes"
+    echo "a partir de qualquer estacao VIDY usando um terminal SSH (Putty)."
+    if ! do_confirmar "Deseja continuar ?" ; then CONTINUAR="N" ; fi
+  fi
+  if [ "$CONTINUAR" = "S" ] ; then
+    sudo "$arquivo"
+    return 0
+  fi
+}
+
+function editar() {
+  arquivo="$1"
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+  
+  MD5SUM_ANTES=`md5sum "$arquivo"`
+  nano "$1"
+  MD5SUM_DEPOIS=`md5sum "$arquivo"`
+  if [ "$MD5SUM_ANTES" != "$MD5SUM_DEPOIS" ] ; then
+    return 0
+  else 
+    return 1
+  fi
+}
+
+function proxy_conf() {
+  arquivo="$1"
+  restart="$2"
+  if [ "$restart" = "" ] || [ -z "$restart" ] ; then
+    restart="N"
+  fi
+  if editar "$arquivo" ; then 
+    if [ "$restart" != "S" ] ; then
+       service squid3 reload
+       press_enter_to_continue
+       return 0
+    else
+      echo "O arquivo :"
+      echo -e "\t$arquivo"
+      echo "foi alterado, recomendo reiniciar o firewall+proxy."
+      echo "Reiniciar o firewall+proxy ?"
+      read CONFIRMA
+      if [ "$CONFIRMA" = "SIM" ] || [ "$CONFIRMA" = "sim" ] || [ "$CONFIRMA" = "S" ] || [ "$CONFIRMA" = "s" ] ; then
+         if [ "$restart" = "S" ] ; then
+           reinit_firewall
+           service squid3 restart
+           return 0
+         fi
+      fi
+    fi
+  fi
+}
+
+function pesquisar_arquivo() {
+  arquivo="$1"
+  if ! [ -f "$arquivo" ] ; then
+    echo "Nao achei o arquivo :"
+    echo "$arquivo"
+    press_enter_to_continue;
+    return 2
+  fi
+  echo "Um filtro e' uma palavra pelo qual procuraremos em :"
+  echo "$arquivo"
+  echo "E exibiremos apenas as ocorrências encontradas."
+  echo "Sem a definição de um filtro, todas as ocorrências serão mostradas"
+  echo "Digite um filtro para busca :"
+  read FILTRO
+  if [ "$FILTRO" != "" ] ; then
+    cat $arquivo |grep "$FILTRO" |less
+  else
+    cat $arquivo |less
+  fi
+  press_enter_to_continue
+  return 0
+}
+
+function do_confirmar() {
+  # Uso :
+  #      do_confirmar "Confirma ? (sim ou nao)"
+  #      if [[ $? -eq 0 ]]; then echo OK; else echo FALHOU; fi
+  #   OR
+  #      if do_confirmar; then echo OK; else echo FALHOU; fi
+  MSG="$1"
+  [ "$MSG" = "" ] && MSG="Confirma ? (sim ou nao)"
+  echo "$MSG" 
+  read CONFIRMA
+  DO_CONFIRMAR_VALUE="nao"
+  if [ "$CONFIRMA" = "SIM" ] || [ "$CONFIRMA" = "sim" ] || [ "$CONFIRMA" = "S" ] || [ "$CONFIRMA" = "s" ] ; then
+    return 0
+  else 
+    return 1
+  fi
+}
+
+function se_acesso_remoto() {
+  # Uso :
+  #      se_acesso_remoto
+  #      if [[ $? -eq 0 ]]; then echo OK; else echo FALHOU; fi
+  #   OR
+  #      if se_acesso_remoto; then echo OK; else echo FALHOU; fi
+  if [ -z "$SSH_CLIENT" ] || [ "$SSH_CLIENT" = "" ] ; then
+     return 1
+  else
+     return 0
+  fi
+}
+
+function reinit_firewall() {
+  echo "Reiniciando o firewall..."
+  [ -f  "$FIREWALL/firewall.sh" ] && sudo "$FIREWALL/firewall.sh"
+  echo "Firewall carregado, pressione [ENTER] para prosseguir."
+  read espera
+}
+
+
+function valid_ip() {
+  # Test an IP address for validity:
+  # Usage:
+  #      valid_ip IP_ADDRESS
+  #      if [[ $? -eq 0 ]]; then echo good; else echo bad; fi
+  #   OR
+  #      if valid_ip IP_ADDRESS; then echo good; else echo bad; fi
+  #
+
+    local  ip=$1
+    local  stat=1
+
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+            && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+function press_enter_to_continue() {
+  ESPERAR_TEMPO="$1"
+  if [ -z "$ESPERAR_TEMPO" ] || [ "$ESPERAR_TEMPO" = "" ] ; then
+   read -p "Pressione [ENTER] para prosseguir..." -n1 -s
+  else
+    echo "Aguarde $ESPERAR_TEMPO antes de prosseguir..."
+    sleep $ESPERAR_TEMPO
+  fi
+}
+
+function log() {
+  log_date="`date +%Y-%m-%d+%H:%M`"
+  log_file="$LOGS"
+  frase="$1"
+  if ! [[ "$frase" =~ "\\" ]] ; then
+    frase="$frase\n"
+  fi
+  if [ -z "$LOGS" ] || [ "$LOGS" == "" ] ; then
+     LOGS="/home/administrador/logs/servidor"
+     if ! [ -d "$LOGS" ] ; then
+       mkdir -p "$LOGS"
+     fi
+     log_file="$LOGS/superdog-$log_date.log"
+  fi
+
+  if [ -z "$1" ] || [ "$1" == "" ] ; then
+    echo "Parametro para log esta vazio"
+    return
+  fi
+  if ! [ -f "$log_file" ] ; then
+    echo "Arquivo para registrar log [$log_file]  não existe !"
+    echo -ne "Criando um arquivo vazio..."
+    touch "$log_file"
+    echo "[OK]"
+  fi
+  echo -ne "$frase"
+  echo -ne "$log_date|$frase" >>$log_file
+}
+
+function do_montar_confere() {
+  check="$1"
+  if [ "$check" = "" ] ; then
+     log "Nao foi especificado o parametro para a função do_montar_confere."
+     return
+  fi 
+
+  do_montar_confere=`mount |grep "$check"|wc -l`
+}
+
+function do_pasta_vazia() {
+  if [ "$(ls -A $1)" ] ; then
+     do_pasta_vazia=0
+  else
+    do_pasta_vazia=1
+  fi
+}
+
+function do_montar_dev() {
+  alvo_device="$1"
+  alvo_pasta="$2"
+  alvo_tipo="auto"
+  RESULT_VALUE="FALHOU"
+  if [ "$alvo_device" = "" ] ; then 
+     log "Erro na montagem de dispositivo : O nome do dispositivo não foi informado."
+     return
+  fi  
+  if [ "$alvo_pasta" = "" ] ; then
+     log "Erro na montagem de dispositivo : O nome do pasta onde seria montado o dispositivo não foi informado."
+     return
+  fi 
+  if ! [ -d  "$alvo_pasta" ] ; then
+    mkdir -p "$alvo_pasta"
+  fi
+  # desmonta, caso a mesma se encontra montada
+  do_montar_confere "$alvo_pasta"
+  if [ $do_montar_confere -gt 0 ] ; then
+    do_desmontar $alvo_pasta
+  fi
+
+  # Verifica se a pasta esta fazia antes de prosseguir
+  do_pasta_vazia "$alvo_pasta"
+  if [ "$do_pasta_vazia" -eq 0 ] ; then 
+     log "A pasta [$alvo_pasta] nao esta vazia."
+     return
+  fi
+
+  # 
+  # montando a unidade de destino, normalmente o usbdisk
+  mount -t $alvo_tipo $alvo_device $alvo_pasta -o sync,nosuid,nouser,rw,dirsync,users
+  if [ $? -ne 0 ] ; then
+    log "A montagem da unidade de destino-backup falhou !"
+    log "Tentativa : mount -t $alvo_tipo $ponto_device $ponto_destino -o sync,nosuid,nouser,rw,dirsync,users"
+    log "Certifique-se que :"
+    log "- tenha ligado a unidade numa porta USB deste servidor;"
+    log "- o dispositivo USB esteja ligado com o led de funcionamento piscando."
+    log "Desligue o aparelho, aguarde alguns instantes e ligue-o novamente"
+    log "e repita a operacao, se insistir o problema contate"
+    log "imediatamente o supervidor." 
+  fi
+  RESULT_VALUE="OK"  
+} 
+
+#  do_montar_cifs : dedicado a montar pastas compartilhadas do Windows
+#  Atenção : Variaveis agente_user,agente_pass e agente_dom devem
+#    existir no script em que for usar essa funcao da forma que se
+#    segue :
+#  agente_user="agente_backup"
+#  agente_pass="ViDy123"
+#  agente_dom="vidy.local"
+#  ponto_smb="//obelix/pub"
+#  ponto_local="/mnt/pub"
+#  do_montar_cifs "$ponto_smb" "$ponto_local"
+#  if [ "$RESULT_VALUE" != "OK" ] ; then
+#    echo "Não foi possivel montar a unidade de origem [$ponto_smb] em [$ponto_local] "
+#    do_desmontar "$ponto_local"
+#    return
+#  fi 
+#
+function do_montar_cifs() {
+  alvo_smb="$1"
+  alvo_pasta="$2"
+  RESULT_VALUE="FALHOU"
+  if [ "$alvo_smb" = "" ] ; then 
+     log "Erro na montagem de SMB : O nome de rede não foi informado."
+     return
+  fi  
+  if [ "$alvo_pasta" = "" ] ; then
+     log "Erro na montagem de SMB : O nome do pasta onde seria montado o acesso a [$alvo_device] não foi informado."
+     return
+  fi 
+  if ! [ -d  "$alvo_pasta" ] ; then 
+    mkdir -p "$alvo_pasta"
+  fi
+  # montando a unidade de rede, as variaveis agente_user, agente_pass e agente_dom serao reaproveitadas
+  mount -t cifs $alvo_smb $alvo_pasta -o username=$agente_user,password=$agente_pass,domain=$agente_dom,users,file_mode=0777,dir_mode=0777,iocharset=utf8
+  if [ $? -ne 0 ] ; then
+    log "Falhou : mount -t cifs $alvo_smb $alvo_pasta -o username=$agente_user,password=*****,domain=$agente_dom,users,file_mode=0777,dir_mode=0777,iocharset=utf8"
+  else
+    RESULT_VALUE="OK"    
+  fi
+}
+
+function do_desmontar() {
+  alvo="$1"
+  RESULT_VALUE="FAIL"
+  if [ "$alvo" = "" ] || \
+     ! [ -d "$alvo" ] ; then
+     echo "alvo para desmontar nao existe : [$alvo]"
+     return
+  fi
+  # so posso desmontar unidades em /mnt ou /media
+  dir_to_unmount=$(mount |grep "$alvo"|cut -d" " -f 3|cut -d"/" -f 2)
+  #if [ "$dir_to_unmount" != "media" ] && [ "$dir_to_unmount" != "mnt" ] ; then
+  #  return
+  #fi
+
+  n=0
+  EXISTE=1
+  while [ $EXISTE -gt 0 ] ; do
+    EXISTE=`mount |grep $alvo|wc -l`
+    if [ "$EXISTE" -gt 0 ] ; then
+      umount $alvo
+      [ -d "$alvo" ] && rmdir $alvo
+    fi
+    # depois de 32 tentativas, desiste
+    n=$(( $n +1 ))
+    if [ $n -gt 32 ] ; then
+      return
+    fi
+  done
+  # se o diretorio montado estiver vazio e estiver localizado em /mnt entao remove-lo
+  if ! [[ "$alvo" =~ "/media" ]] ; then
+    if [ -d "$alvo" ] && [ "$dir_to_unmount" = "mnt" ] ; then
+      if [ "$alvo/*" = "$alvo/*" ] ; then
+        echo "Removendo diretorio vazio [$alvo]"
+        rmdir $alvo
+      fi
+    fi
+  fi
+  RESULT_VALUE="OK"
+  sleep 5s
+}
+
+#
+# do_sendmail "suporte@vidy.com.br" "Ref. Teste" "Isso é uma mensagem de teste."
+#
+function do_sendmail() {
+  BIN="/usr/bin/mutt"
+  if ! [ -f "$BIN" ] ; then
+    echo "Nao posso notificar por email por falta do arquivo : $BIN"
+    return;  
+  fi  
+
+  echo "enviando email notificando sucesso na realizacao do backup"
+  echo "incluindo $file_error_log"
+  sudo touch "$sendmail_message_file"
+  sudo chmod 666 "$sendmail_message_file"
+  MAILTO="$1"
+  COPYTO=""
+  SUBJECT="$2"
+  sendmail_message_file=`mktemp`
+  echo "$3">$sendmail_message_file
+
+  # enviando mensagem
+  $BIN -s "$SUBJECT" "$MAILTO" < "$sendmail_message_file"
+
+  rm -f "$sendmail_message_file"
+}
+
+function do_remover_acentuacao() {
+  do_remover_acentuacao=""
+  ORIGINAL_STRING="$1"
+  NEW_STRING="$ORIGINAL_STRING"
+  SUBST_CHAR="_"
+  ACCEPT_CHARS="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!-_=+(){}[]\\,./"
+  # Removendo a acentuacao
+  # Anteriormente usava o aplicativo 'unaccent', mas ele tem problemas em algumas situacoes
+  # assim resolví fazer um modo mais braçal como se pode ver abaixo
+  #if [ -f "/usr/bin/unaccent" ] ; then
+  #    NEW_STRING=`/usr/bin/unaccent UTF-8 "$ORIGINAL_STRING"`
+  #    if [ -z "$NEW_STRING" ] || [ "$NEW_STRING" = "" ] ; then
+  #      NEW_STRING="$ORIGINAL_STRING"
+  #    fi
+  #fi
+  NEW_STRING="${NEW_STRING//º/_}"
+  NEW_STRING="${NEW_STRING//á/a}"
+  NEW_STRING="${NEW_STRING//à/a}"
+  NEW_STRING="${NEW_STRING//ä/a}"
+  NEW_STRING="${NEW_STRING//ã/a}"
+  NEW_STRING="${NEW_STRING//é/e}"
+  NEW_STRING="${NEW_STRING//ê/e}"
+  NEW_STRING="${NEW_STRING//í/i}"
+  NEW_STRING="${NEW_STRING//ï/i}"
+  NEW_STRING="${NEW_STRING//ó/o}"
+  NEW_STRING="${NEW_STRING//õ/o}"
+  NEW_STRING="${NEW_STRING//ú/u}"
+  NEW_STRING="${NEW_STRING//ü/u}"
+  NEW_STRING="${NEW_STRING//Á/A}"
+  NEW_STRING="${NEW_STRING//À/A}"
+  NEW_STRING="${NEW_STRING//Ä/A}"
+  NEW_STRING="${NEW_STRING//Ã/A}"
+  NEW_STRING="${NEW_STRING//É/E}"
+  NEW_STRING="${NEW_STRING//Ê/E}"
+  NEW_STRING="${NEW_STRING//Í/I}"
+  NEW_STRING="${NEW_STRING//Ï/I}"
+  NEW_STRING="${NEW_STRING//Ó/O}"
+  NEW_STRING="${NEW_STRING//Õ/O}"
+  NEW_STRING="${NEW_STRING//Ú/U}"
+  NEW_STRING="${NEW_STRING//Ü/U}"
+  NEW_STRING="${NEW_STRING//ç/c}"
+  NEW_STRING="${NEW_STRING//Ç/C}"
+  
+  # removendo caracteres invalidos
+  LEN=${#NEW_STRING}
+  POS=0
+  while [ $POS -le $LEN ] ; do
+   CHAR="${NEW_STRING:$POS:1}"
+   if [[ "$ACCEPT_CHARS" =~ "$CHAR" ]] ; then
+     do_remover_acentuacao="$do_remover_acentuacao$CHAR"
+   else
+     do_remover_acentuacao="$do_remover_acentuacao$SUBST_CHAR"
+   fi
+   POS=$((POS+1))
+  done
+  NEW_LEN=${#do_remover_acentuacao}
+  
+  if [ $LEN != $NEW_LEN ] ; then
+    do_remover_acentuacao="$ORIGINAL_STRING"
+  fi
+}
+
+function sugestao_nome_arq() {
+  # retorna um nome sugestivo para uma pasta
+  # em forma de nome de arquivo
+  # util para compactar uma pasta, porem
+  # escolher um nome para o zip que tenha
+  # alguma coisa a ver com o nome original
+  # da pasta onde foram comprimido os 
+  # arquivos.Exemplo de uso :
+  # backup_file=`sugestao_nome_arq "$copiar_de_origem"`
+  if [ -z "$1" ] || [ "$1" = "" ] ; then
+    echo "Parametro esta vazio"
+    return
+  fi
+
+  # nomes sem acentuacao
+  do_remover_acentuacao "$1"
+  SUGESTAO_ARQUIVO="$do_remover_acentuacao"
+
+  # trocando // por servidor_ (caso de a origem for um endereco smb //server/compartilhamento)
+  if [ "${SUGESTAO_ARQUIVO:0:2}" = "//" ] ; then
+      SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//\/\//servidor_}
+  else
+      # removendo o primeiro "/" do endereco para compor o nome nome
+      if [ "${backup_file:0:1}" = "/" ] ; then
+        SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+      fi
+  fi
+  # iniciou com _ entao remove o primeiro caracter
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1}
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+  # trocando / por :
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//\//:}
+  # trocando :mnt: por nada
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:mnt:/}
+  # trocando :media: por nada
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:media:/}
+  # trocando : por _
+  SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO//:/_}
+  # iniciou com _ entao remove o primeiro caracter
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1}
+  [ "${SUGESTAO_ARQUIVO:0:1}" = "_" ] && SUGESTAO_ARQUIVO=${SUGESTAO_ARQUIVO:1} 
+  echo $SUGESTAO_ARQUIVO
+}
+
+
+function do_copy() {
+  # copia uma pasta de um local de origem 
+  # para um local de destino
+  # Porem faz a compactacao para o destino se o arquivo não estiver compactado
+  # Atenção : Não subsititui arquivos já existentes na unidade de destino, 
+  #           por essa razão, sempre grave novos backups em pastas novas e
+  #           limpas. 
+  copiar_de_origem="$1"
+  copiar_para_destino="$2"
+  se_normatizar="$3"
+  RESULT_VALUE="OK"
+  LISTA_NAO_COMPACTAR=".7z .ace .ain .alz .apz .ar .arc .ari .arj .ark .axx .b64 .ba .bh .boo .bz .bz2 .bzip \
+  .bzip2 .c00 .c01 .c02 .car .cbr .cbz .cp9 .cpgz .cpt .dar .dd .deb .dgc .dist .ecs .efw \
+  .fdp .gca .gz .gzi .gzip .ha .hbc .hbc2 .hbe .hki .hki1 .hki2 .hki3 .hpk .hyp .ice .ipg \
+  .ipk .ish .j .jgz .jic .kgb .lbr .lemon .lha .lnx .lqr .lzh .lzm .lzma .lzo .lzx .md .mint \
+  .mpkg .mzp .p7m .package .pae .pak .paq6 .paq7 .paq8 .par .par2 .pbi .pcv .pea .pf .pim .pit \
+  .piz .pkg .pup .pup .puz .pwa .qda .r00 .r01 .r02 .r03 .rar .rev .rk .rnc .rpm .rte .rz .rzs \
+  .s00 .s01 .s02 .s7z .sar .sdc .sdn .sea .sen .sfs .sfx .sh .shar .shk .shr .sit .sitx .spt \
+  .sqx .sqz .tar .taz .tbz .tbz2 .tg .tgz .tlz .tz .uc2 .uha .vsi .wad .war .wot .xef .xez \
+  .xpi .xx .y .yz .z .z01 .z02 .z03 .z04 .zap .zip .zipx .zix .zoo .zz .jpg .png .gif .cab \
+  .exe .avi .mpg .mp3 .mp2 .aac .pdf .ods .odt .odp .cfg"
+  
+  LISTA_NAO_SALVAR=".\$\$\$ .tmp .swp .lnk .err \
+  .key01 .key02 .key03 .key04 .key05 .key06 .key07 .key08 .key09 .key10 .key11 .key12 .key13 .key14 .key15 .key16"
+
+  if [ "$copiar_de_origem" = "" ] ; then 
+     log "Erro na copia de arquivos : O endereco de origem não foi informado."
+     return
+  fi  
+  if [ "$copiar_para_destino" = "" ] ; then
+     log "Erro na copia de arquivos : O endereco de destino não foi informado."
+     return
+  fi 
+  if ! [ -d  "$copiar_para_destino" ] ; then 
+    mkdir -p "$copiar_para_destino"
+  fi
+  
+  # Se for especificado para normatizar (="S") entao
+  # os caracteres deverao ser minusculos e sem acento
+  if [ -z "$se_normatizar" ] || [ "$se_normatizar" = "" ] ; then 
+    se_normatizar="N"
+  fi  
+  # lendo todos os arquivos na pasta de origem e jogando para dentro de um arquivo temporario
+  temp=`mktemp`
+  find "$copiar_de_origem/" -type f >$temp
+  while read ARQ_ATUAL ; do
+    ARQ_ATUAL_PASTA=`dirname "$ARQ_ATUAL"`
+    NOME_ARQUIVO=`basename "$ARQ_ATUAL"`
+    FILESIZE=$(stat -c%s "$ARQ_ATUAL")
+    # entao remover a acentuacao que houver no nome de arquivo
+    if [ "$se_normatizar" = "S" ] ; then
+      do_remover_acentuacao "$NOME_ARQUIVO"
+      NOME_ARQUIVO="$do_remover_acentuacao"
+    fi
+    
+    # Apenas extensoes de arquivos em minusculo
+    NOME_ARQUIVO_EXT=${NOME_ARQUIVO#*.}
+    NOME_ARQUIVO_EXT=`echo "$NOME_ARQUIVO_EXT" | tr [:upper:] [:lower:]`
+
+    # remover a acentuacao que houver no nome da pasta
+    if [ "$se_normatizar" = "S" ] ; then
+      do_remover_acentuacao "$copiar_para_destino/$ARQ_ATUAL_PASTA"
+      do_remover_acentuacao=`echo "$do_remover_acentuacao" | tr [:upper:] [:lower:]`
+      NOVA_PASTA="$do_remover_acentuacao"
+    else
+      NOVA_PASTA="$copiar_para_destino/$ARQ_ATUAL_PASTA"
+    fi
+    # trocando //mnt por /
+    NOVA_PASTA=${NOVA_PASTA//\/\/$mountdir/\/}
+    # trocando //media/ por /
+    #NOVA_PASTA=${NOVA_PASTA//\/\/$mountdir/\/}
+    
+    # As linhas a seguir vao determinar se havera compactacao ou se realmente
+    # é necessario fazer o backup de tal arquivo
+    COMPACTAR_ARQUIVO="S"
+    SALVAR_ARQUIVO="S"
+    
+    # tratando arquivos que não devem ser salvos no backup
+    [[ "$LISTA_NAO_SALVAR" =~ "$NOME_ARQUIVO_EXT" ]] && SALVAR_ARQUIVO="N"
+    [[ "$ARQ_ATUAL" =~ "RECYCLER" ]] && SALVAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "thumbs.db" ] && SALVAR_ARQUIVO="N"   
+    
+    # tratando de nomes de arquivos que não devem ser compactados
+    [ "$NOME_ARQUIVO" = "setup.exe" ] && COMPACTAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "install.exe" ] && COMPACTAR_ARQUIVO="N"
+    [ "$NOME_ARQUIVO" = "instalar.exe" ] && COMPACTAR_ARQUIVO="N"  
+
+    # arquivos com zero bytes nao devem ser copiados
+    #if [ -f "$ARQ_ATUAL" ] ; then
+    #   ![ -s "$ARQ_ATUAL" ] && COMPACTAR_ARQUIVO="N"   
+    #fi
+    
+    # arquivos menores que 1024x10=10240 bytes (10K)  nao devem ser comprimidos
+    [ "$FILESIZE" -lt 10240 ] && COMPACTAR_ARQUIVO="N"
+
+
+    if [ "$SALVAR_ARQUIVO" = "S" ] ; then
+      ! [ -d "$NOVA_PASTA" ] && mkdir -p "$NOVA_PASTA"
+      [[ "$LISTA_NAO_COMPACTAR" =~ "$NOME_ARQUIVO_EXT" ]] && COMPACTAR_ARQUIVO="N"
+      # somente arquivos com mais de zero bytes podem ser compactados
+      if [ "$COMPACTAR_ARQUIVO" = "S" ] && ! [ -s "$ARQ_ATUAL" ] ; then
+        COMPACTAR_ARQUIVO="N"
+      fi
+
+      if [  "$COMPACTAR_ARQUIVO" = "S" ] ; then
+        echo "[$NOME_ARQUIVO_EXT] transferindo [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz]"
+        if ! [ -f "$NOVA_PASTA/$NOME_ARQUIVO.gz" ] ; then
+          gzip -c "$ARQ_ATUAL" >"$NOVA_PASTA/$NOME_ARQUIVO.gz"
+          if [ $? -ne 0 ] ; then
+             log "[backup-falhou] : erro ao copiar [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO.gz]"
+             RESULT_VALUE="FALHOU"
+          fi
+        fi
+      else
+        echo "[$NOME_ARQUIVO_EXT] transferindo [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO]"
+        if ! [ -f "$NOVA_PASTA/$NOME_ARQUIVO.gz" ] ; then
+          cp  "$ARQ_ATUAL" "$NOVA_PASTA/$NOME_ARQUIVO"
+          if [ $? -ne 0 ] ; then
+             log "[backup-falhou] : erro ao copiar [$ARQ_ATUAL] para [$NOVA_PASTA/$NOME_ARQUIVO]"
+             RESULT_VALUE="FALHOU"
+          fi
+        fi
+      fi
+    fi
+  done < $temp 
+  [ -f "$temp" ] && rm -f "$temp"
+}
+
+function do_copy_comprime() {
+  # copia uma pasta de um local de origem 
+  # para um local de destino
+  # Porem faz a compactacao para o destino
+  copiar_de_origem="$1"
+  copiar_para_destino="$2"
+  do_copy_comprime="FALHOU"
+
+  if [ "$3" != "tgz"  ] ; then
+    #### USANDO 7ZIP ####
+    COMPACTAR="/usr/bin/7z a -y -t7z -bd -l -m0=lzma -mx=3 -mfb=64 -md=32m -ms=on -v100m -ax@$backup_lista_negra "
+    COMPACTAR_EXT="7z"
+    COMPACTAR_CATALOGAR="/usr/bin/7z l "
+  else
+    #### USANDO TAR.GZ ####
+    COMPACTAR="/bin/tar -czv --exclude-from=$backup_lista_negra -f "
+    COMPACTAR_EXT="tgz"
+    COMPACTAR_CATALOGAR="/bin/tar -tf "
+  fi
+  if [ "$copiar_de_origem" = "" ] ; then 
+     log "Erro na copia de arquivos : O endereco de origem não foi informado."
+     return
+  fi  
+  if [ "$copiar_para_destino" = "" ] ; then
+     log "Erro na copia de arquivos : O endereco de destino não foi informado."
+     return
+  fi 
+  if ! [ -d  "$copiar_para_destino" ] ; then 
+    mkdir -p "$copiar_para_destino"
+  fi  
+  backup_file=`sugestao_nome_arq "$copiar_de_origem"`
+  # acrescentando o caminho completo
+  backup_file="$copiar_para_destino/$backup_file.$COMPACTAR_EXT" 
+  #echo $COMPACTAR $backup_file $copiar_de_origem
+  $COMPACTAR $backup_file $copiar_de_origem 2>>$file_error_log
+  # verificando se ouve erro
+  if [ $? -ne 0 ] ; then
+     log "Backup de [$pak] completado porém com alguns erros, verifique o log para saber quais são."
+     log "Sintaxe utilizada : $COMPACTAR $backup_file $copiar_de_origem"
+  else
+     log "Backup de [$pak] completado com sucesso."
+     do_copy_comprime="OK"
+  fi
+  #if [ -f "$backup_file" ] || [ -f "$backup_file.001" ] ; then
+  #   # Catalogando o arquivo de backup recem-criado
+  #   [ -f "$backup_file" ] && $COMPACTAR_CATALOGAR "$backup_file" >"$backup_file.txt"
+  #   [ -f "$backup_file.001" ] && $COMPACTAR_CATALOGAR "$backup_file.001" >"$backup_file.txt"
+  #fi  
+}
+
